@@ -1,24 +1,19 @@
-# UpsacleVid
+# AI Upscaler
 
-🚀 AI Upscaler
-최신 Real-ESRGAN 모델을 사용하여 이미지와 비디오를 고해상도로 업스케일하는 데스크톱 애플리케이션입니다. 사용자 친화적인 인터페이스와 유연한 테마 설정을 지원합니다.
+최신 **Real-ESRGAN** 모델을 사용하여 이미지와 비디오를 고해상도로 업스케일하는 데스크톱 애플리케이션입니다. 사용자 친화적인 인터페이스와 유연한 테마 설정을 지원합니다.
 
-✨ 주요 기능
-이미지 업스케일: 2x, 4x, 8x 배율 지원.
+## ✨ 주요 기능
+* **이미지 업스케일:** 2x, 4x, 8x 배율 지원.
+* **비디오 업스케일:** 대용량 비디오 분할 처리 및 특정 구간 선택 업스케일링 가능.
+* **하드웨어 최적화:** GPU(CUDA) 및 CPU 환경 자동 감지 및 최적화 추천.
+* **테마 및 언어:** 다크/라이트 테마 및 한국어/영어 지원.
+* **현대적인 UI:** 깔끔하고 차분한 디자인의 Qt 기반 인터페이스.
 
-비디오 업스케일: 대용량 비디오 분할 처리 및 특정 구간 선택 업스케일링 가능.
+## 🛠 설치 방법
 
-하드웨어 최적화: GPU(CUDA) 및 CPU 환경 자동 감지 및 최적화 추천.
-
-테마 및 언어: 다크/라이트 테마 및 한국어/영어 지원.
-
-현대적인 UI: 깔끔하고 차분한 디자인의 Qt 기반 인터페이스.
-
-🛠 설치 방법
-필수 라이브러리 설치:
-
-Bash
-pip install PyQt5 torch torchvision opencv-python basicsr realesrgan
+1. **필수 라이브러리 설치:**
+   ```bash
+   pip install PyQt5 torch torchvision opencv-python basicsr realesrgan
 프로젝트 복사:
 모든 파이썬 파일(Launch.py, setting.py, UpscaleImg.py, UpscaleVid.py)을 동일한 폴더에 위치시킵니다.
 
@@ -53,3 +48,4 @@ GPU 사용자: CUDA가 설치되어 있다면 훨씬 빠르게 처리됩니다.
 📝 라이선스 및 참고
 본 프로그램은 Real-ESRGAN 알고리즘을 활용합니다.
 
+학습 모델의 출처 및 자세한 내용은 Real-ESRGAN GitHub을 참조하세요.
