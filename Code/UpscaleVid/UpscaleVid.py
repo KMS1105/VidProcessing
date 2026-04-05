@@ -57,7 +57,7 @@ def run_split_upscale(input_path, num_splits, target_parts):
         if part_idx >= num_splits: continue
             
         start_f, end_f = parts_ranges[part_idx]
-        output_path = f"part_{part_idx}_upscaled.mov"
+        output_path = f"./Vid/part_{part_idx}_upscaled.mov"
         
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -78,7 +78,7 @@ def run_split_upscale(input_path, num_splits, target_parts):
     cap.release()
 
 if __name__ == "__main__":
-    input_file = './DamuiL79.mov'
+    input_file = './Vid/DamuiL79.mov'
     
     N = 10              
     WORK_LIST = [2]   
