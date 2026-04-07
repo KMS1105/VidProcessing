@@ -19,8 +19,7 @@
 
 프로그램 실행을 위해 필요한 라이브러리를 터미널(CMD)에서 설치해야 합니다.
 
-    # 필수 라이브러리 설치
-    pip install PyQt5 torch torchvision opencv-python basicsr realesrgan
+    pip install -r requirements.txt
 
 > 참고: NVIDIA 그래픽카드를 사용 중이라면 CUDA Toolkit을 설치하여 하드웨어 가속을 사용할 수 있습니다.
 
