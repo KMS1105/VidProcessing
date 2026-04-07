@@ -51,9 +51,8 @@ UI_TEXTS = {
         'error_no_target_parts': '❌ 최소 하나의 Target Part를 지정하세요.',
         'tab_image': '이미지 업스케일',
         'tab_video': '비디오 업스케일',
-        'tab_video_merge': '영상 편집 (합치기)',  # 추가
+        'tab_video_merge': '영상 편집 (합치기)',  
         
-        # 편집기 탭 관련 추가
         'video_timeline': '타임라인 (병합 순서)',
         'timeline_preview_msg': '목록에 영상을 추가하면 여기에 시퀀스가 구성됩니다.',
         'video_sources': '소스 미디어 리스트',
@@ -64,8 +63,7 @@ UI_TEXTS = {
         'export_video': '최종 영상 내보내기',
         'error_min_videos': '최소 2개 이상의 영상을 추가해주세요.',
         'success_merge': '영상이 성공적으로 합쳐졌습니다!',
-        
-        # 기타 필요한 키
+
         'window_title': 'Upscaler - 영상/이미지 업스케일러',
         'menu_theme': '테마',
         'menu_light': '라이트 모드',
