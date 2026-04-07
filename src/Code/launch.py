@@ -1,29 +1,112 @@
 import os
-import re
 import sys
-from PyQt5.QtWidgets import QApplication, QWidget, QTabWidget, QVBoxLayout, QMenuBar, QFileDialog, QHBoxLayout, QLabel, QPushButton
+import re
+
+# DLL 경로 설정 (PyTorch 관련)
+dll_path = os.path.join(sys.prefix, 'Lib', 'site-packages', 'torch', 'lib')
+if os.path.exists(dll_path):
+    os.add_dll_directory(dll_path)
+
+from PyQt5.QtWidgets import (QApplication, QWidget, QTabWidget, QVBoxLayout, 
+                             QMenuBar, QFileDialog, QHBoxLayout, QLabel, 
+                             QPushButton, QListWidget, QAbstractItemView, QMessageBox)
 from PyQt5.QtCore import Qt
 
 from setting import UI_TEXTS, get_device_info_text, get_device_recommendation, apply_app_theme
 from UpscaleImg import create_image_tab, ImageUpscaleWorker
 from UpscaleVid import create_video_tab, VideoUpscaleWorker
 
-def create_label_with_info(parent, text_key, tooltip_key):
-    container = QWidget()
-    hl = QHBoxLayout(container)
-    hl.setContentsMargins(0, 0, 0, 0)
-    label = QLabel(parent.t(text_key))
-    info = QPushButton('!')
-    info.setToolTip(parent.t(tooltip_key))
-    info.setProperty("class", "help-button")
-    info.setFixedSize(20, 20)
-    info.setCursor(Qt.PointingHandCursor)
-    hl.addWidget(label)
-    hl.addWidget(info)
-    if hasattr(parent, 'translations'):
-        parent.translations.append((label, 'setText', text_key))
-        parent.translations.append((info, 'setToolTip', tooltip_key))
-    return container
+# 영상 합치기 로직
+from moviepy.editor import VideoFileClip, concatenate_videoclips
+
+def merge_videos(video_paths, output_path):
+    if not video_paths:
+        return
+    
+    clips = []
+    try:
+        for path in video_paths:
+            clip = VideoFileClip(path)
+            # 첫 번째 영상의 해상도에 맞춰 리사이징
+            if clips and (clip.size != clips[0].size):
+                clip = clip.resize(width=clips[0].size[0], height=clips[0].size[1])
+            clips.append(clip)
+        
+        final_clip = concatenate_videoclips(clips, method="compose")
+        final_clip.write_videofile(output_path, codec="libx264", audio_codec="aac")
+        
+        for clip in clips:
+            clip.close()
+            
+    except Exception as e:
+        raise e
+
+# 영상 합치기 전용 탭 클래스
+class VideoMergeTab(QWidget):
+    def __init__(self, main_app):
+        super().__init__()
+        self.main_app = main_app
+        self.initUI()
+
+    def initUI(self):
+        layout = QVBoxLayout()
+        
+        self.label = QLabel(self.main_app.t('merge_video_list')) # 번역 키 필요
+        layout.addWidget(self.label)
+
+        # 리스트 위젯 (드래그로 순서 변경 가능)
+        self.video_list = QListWidget()
+        self.video_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.video_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        layout.addWidget(self.video_list)
+
+        # 버튼 레이아웃
+        btn_layout = QHBoxLayout()
+        self.btn_add = QPushButton(self.main_app.t('add_video'))
+        self.btn_remove = QPushButton(self.main_app.t('remove_selected'))
+        self.btn_clear = QPushButton(self.main_app.t('clear_all'))
+        
+        btn_layout.addWidget(self.btn_add)
+        btn_layout.addWidget(self.btn_remove)
+        btn_layout.addWidget(self.btn_clear)
+        layout.addLayout(btn_layout)
+
+        # 실행 버튼
+        self.btn_run = QPushButton(self.main_app.t('run_merge'))
+        self.btn_run.setProperty("class", "run-button") # 기존 스타일 유지용
+        self.btn_run.setFixedHeight(45)
+        layout.addWidget(self.btn_run)
+
+        self.setLayout(layout)
+
+        # 연결
+        self.btn_add.clicked.connect(self.add_videos)
+        self.btn_remove.clicked.connect(self.remove_selected)
+        self.btn_clear.clicked.connect(self.video_list.clear)
+        self.btn_run.clicked.connect(self.run_video_merge)
+
+    def add_videos(self):
+        files, _ = QFileDialog.getOpenFileNames(self, 'Select Videos', '', 'Videos (*.mp4 *.mov *.avi *.mkv)')
+        if files:
+            self.video_list.addItems(files)
+
+    def remove_selected(self):
+        for item in self.video_list.selectedItems():
+            self.video_list.takeItem(self.video_list.row(item))
+
+    def run_video_merge(self):
+        items = [self.video_list.item(i).text() for i in range(self.video_list.count())]
+        if len(items) < 2:
+            QMessageBox.warning(self, "Warning", self.main_app.t('error_min_videos'))
+            return
+
+        save_path, _ = QFileDialog.getSaveFileName(self, 'Save Merged Video', 'merged.mp4', 'Video (*.mp4)')
+        if save_path:
+            try:
+                merge_videos(items, save_path)
+                QMessageBox.information(self, "Success", self.main_app.t('success_merge'))
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"{str(e)}")
 
 class UpscaleApp(QWidget):
     def __init__(self):
@@ -36,13 +119,21 @@ class UpscaleApp(QWidget):
 
     def initUI(self):
         self.setWindowTitle('Upscaler')
-        self.setGeometry(120, 120, 760, 620)
+        self.setGeometry(120, 120, 760, 650) # 높이 소폭 조정
         self.menu_bar = QMenuBar()
         main_layout = QVBoxLayout()
         main_layout.setMenuBar(self.menu_bar)
+        
         self.tabs = QTabWidget()
+        
+        # 1. 이미지 업스케일 탭
         self.tabs.addTab(create_image_tab(self, self.translations), self.t('tab_image'))
+        # 2. 비디오 업스케일 탭
         self.tabs.addTab(create_video_tab(self, self.translations), self.t('tab_video'))
+        # 3. 비디오 합치기 탭 (추가됨)
+        self.video_merge_tab = VideoMergeTab(self)
+        self.tabs.addTab(self.video_merge_tab, self.t('tab_video_merge')) # 번역 키: tab_video_merge
+        
         main_layout.addWidget(self.tabs)
         self.set_menu()
         self.setLayout(main_layout)
@@ -74,19 +165,33 @@ class UpscaleApp(QWidget):
         self.set_menu()
         self.tabs.setTabText(0, self.t('tab_image'))
         self.tabs.setTabText(1, self.t('tab_video'))
+        self.tabs.setTabText(2, self.t('tab_video_merge'))
+        
         for widget, method, key in self.translations:
             getattr(widget, method)(self.t(key))
+            
+        # UI_TEXTS에 새 키가 정의되어 있어야 합니다. (아래 팁 참고)
         self.img_device_label.setText(get_device_info_text(self.language))
         self.vid_device_label.setText(get_device_info_text(self.language))
         self.img_recommend_label.setText(get_device_recommendation(self.language))
         self.vid_recommend_label.setText(get_device_recommendation(self.language))
+        
+        # 버튼 텍스트 갱신
         self.img_run_btn.setText(self.t('upscale_image'))
         self.vid_run_btn.setText(self.t('run_video_upscale'))
-        self.img_browse_btn.setText(self.t('browse'))
-        self.img_output_browse_btn.setText(self.t('browse'))
-        self.vid_browse_btn.setText(self.t('browse'))
-        self.output_browse_btn.setText(self.t('browse'))
+        # 합치기 탭 버튼 갱신
+        self.video_merge_tab.label.setText(self.t('merge_video_list'))
+        self.video_merge_tab.btn_add.setText(self.t('add_video'))
+        self.video_merge_tab.btn_remove.setText(self.t('remove_selected'))
+        self.video_merge_tab.btn_clear.setText(self.t('clear_all'))
+        self.video_merge_tab.btn_run.setText(self.t('run_merge'))
+        
+        # 브라우즈 버튼 공통
+        for btn in [self.img_browse_btn, self.img_output_browse_btn, 
+                    self.vid_browse_btn, self.output_browse_btn]:
+            btn.setText(self.t('browse'))
 
+    # ... (기본 이미지/비디오 실행 함수들은 동일) ...
     def browse_image_input(self):
         file_path, _ = QFileDialog.getOpenFileName(self, 'Select Input Image', '', 'Images (*.png *.jpg *.jpeg *.bmp)')
         if file_path: self.img_input_edit.setText(file_path)
@@ -104,7 +209,8 @@ class UpscaleApp(QWidget):
     def run_image_upscale(self):
         input_path = self.img_input_edit.text().strip()
         output_folder = self.img_output_edit.text().strip()
-        scale = int(self.img_scale_combo.currentText().replace('x', ''))
+        scale_text = self.img_scale_combo.currentText().replace('x', '')
+        scale = int(scale_text)
         if not os.path.exists(input_path):
             self.append_image_log(self.t('error_input_missing').format(input_path))
             return

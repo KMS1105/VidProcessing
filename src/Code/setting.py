@@ -3,6 +3,14 @@ import torch
 
 UI_TEXTS = {
     'ko': {
+        'tab_video_merge': '영상 합치기',
+        'merge_video_list': '합칠 영상 목록 (드래그하여 순서 변경):',
+        'add_video': '영상 추가',
+        'remove_selected': '선택 삭제',
+        'clear_all': '전체 삭제',
+        'run_merge': '영상 합치기 실행',
+        'error_min_videos': '최소 2개 이상의 영상을 추가해주세요.',
+        'success_merge': '영상이 성공적으로 합쳐졌습니다!',
         'window_title': 'Upscaler',
         'tab_image': '이미지',
         'tab_video': '비디오',
@@ -43,6 +51,14 @@ UI_TEXTS = {
         'error_no_target_parts': '❌ 최소 하나의 Target Part를 지정하세요.',
     },
     'en': {
+        'tab_video_merge': 'Video Merge',
+        'merge_video_list': 'Video List (Drag to reorder):',
+        'add_video': 'Add Video',
+        'remove_selected': 'Remove Selected',
+        'clear_all': 'Clear All',
+        'run_merge': 'Run Merge',
+        'error_min_videos': 'Please add at least 2 videos.',
+        'success_merge': 'Videos merged successfully!',
         'window_title': 'Upscaler',
         'tab_image': 'Image',
         'tab_video': 'Video',
