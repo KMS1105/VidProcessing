@@ -5,6 +5,7 @@ import torch
 import numpy as np
 import openvino as ov
 import urllib.request
+from moviepy.editor import VideoFileClip, concatenate_videoclips
 from openvino.runtime import Core
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QPushButton, QLineEdit,
@@ -44,14 +45,16 @@ def run_split_upscale(input_path, num_splits, target_parts, scale=2, tile=800, o
     }
     
     model_base = model_filenames.get(scale, 'RealESRGAN_x2plus')
-    weights_dir = os.path.join(os.getcwd(), 'weights')
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    weights_dir = os.path.join(base_dir, 'weights')
     os.makedirs(weights_dir, exist_ok=True)
     pth_path = os.path.join(weights_dir, f"{model_base}.pth")
     xml_path = os.path.join(weights_dir, f"{model_base}.xml")
 
     if not os.path.exists(pth_path):
-        if log_callback: log_callback(f"⏳ 모델 다운로드 중: {model_base}")
+        if log_callback: log_callback(f"⏳ 모델 가중치 파일({model_base}.pth) 다운로드 중...")
         urllib.request.urlretrieve(model_urls[scale], pth_path)
+        if log_callback: log_callback(f"✅ 다운로드 완료: {pth_path}")
 
     cap = cv2.VideoCapture(input_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -72,6 +75,7 @@ def run_split_upscale(input_path, num_splits, target_parts, scale=2, tile=800, o
             dummy = torch.randn(1, 3, 256, 256)
             ov_model = ov.convert_model(model_temp, example_input=dummy)
             ov.save_model(ov_model, xml_path)
+            if log_callback: log_callback(f"✅ 모델 변환 완료: {xml_path}")
         
         ov_model_loaded = core.read_model(xml_path)
         ov_model_loaded.reshape([1, 3, new_h, new_w])
@@ -82,14 +86,21 @@ def run_split_upscale(input_path, num_splits, target_parts, scale=2, tile=800, o
 
     frames_per_part = total_frames // num_splits
     parts_ranges = [(i * frames_per_part, (i + 1) * frames_per_part if i != num_splits - 1 else total_frames) for i in range(num_splits)]
-    selected_parts = [idx for idx in target_parts if 0 <= idx < num_splits]
+    selected_parts = sorted([idx for idx in target_parts if 0 <= idx < num_splits])
     total_selected_frames = sum(parts_ranges[idx][1] - parts_ranges[idx][0] for idx in selected_parts)
     processed_frames = 0
 
-    os.makedirs(output_folder, exist_ok=True)
+    video_filename = os.path.splitext(os.path.basename(input_path))[0]
+    final_output_dir = os.path.join(output_folder, video_filename)
+    os.makedirs(final_output_dir, exist_ok=True)
+
+    part_files = []
+
     for part_idx in selected_parts:
         start_f, end_f = parts_ranges[part_idx]
-        output_path = os.path.join(output_folder, f"part_{part_idx}_x{scale}.mp4")
+        output_path = os.path.join(final_output_dir, f"part_{part_idx}_x{scale}.mp4")
+        part_files.append(output_path)
+        
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
         out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (new_w * scale, new_h * scale))
 
@@ -110,10 +121,27 @@ def run_split_upscale(input_path, num_splits, target_parts, scale=2, tile=800, o
                 
                 out.write(output)
                 processed_frames += 1
-                if progress_callback: progress_callback(int(processed_frames * 100 / total_selected_frames))
+                if progress_callback: progress_callback(int(processed_frames * 95 / total_selected_frames))
         finally:
             out.release()
     cap.release()
+
+    if len(part_files) > 0:
+        if log_callback: log_callback("🎬 영상 합치기 시작...")
+        try:
+            clips = [VideoFileClip(f) for f in part_files]
+            final_clip = concatenate_videoclips(clips)
+            merged_filename = f"{video_filename}_full_x{scale}.mp4"
+            merged_path = os.path.join(final_output_dir, merged_filename)
+            final_clip.write_videofile(merged_path, codec="libx264", audio=True)
+            
+            for clip in clips: clip.close()
+            if log_callback: log_callback(f"✅ 합본 저장 완료: {merged_filename}")
+        except Exception as e:
+            if log_callback: log_callback(f"⚠️ 합치기 오류: {str(e)}")
+
+    if progress_callback: progress_callback(100)
+    return final_output_dir
 
 class VideoUpscaleWorker(QThread):
     progress = pyqtSignal(int)
@@ -129,31 +157,32 @@ class VideoUpscaleWorker(QThread):
     def run(self):
         try:
             self.progress.emit(1)
-            run_split_upscale(self.input_path, self.num_splits, self.target_parts, self.scale, self.tile, self.output_folder, self.progress.emit, self.log.emit)
-            self.finished.emit(f"✨ 완료: {self.output_folder}")
+            result_dir = run_split_upscale(
+                self.input_path, self.num_splits, self.target_parts, 
+                self.scale, self.tile, self.output_folder, 
+                self.progress.emit, self.log.emit
+            )
+            self.finished.emit(f"✨ 완료: {os.path.abspath(result_dir)}")
         except Exception as e:
             self.finished.emit(f"❌ 오류: {str(e)}")
 
-def create_label_with_info(translator, text_key, tooltip_key):
+def create_label_with_info(parent, text_key, tip_key):
+    layout = QHBoxLayout()
+    label = QLabel(parent.t(text_key))
+    info_btn = QPushButton("?")
+    info_btn.setFixedSize(20, 20)
+    info_btn.setToolTip(parent.t(tip_key))
+    info_btn.setStyleSheet("QPushButton { border-radius: 10px; background-color: #e0e0e0; font-weight: bold; }")
+    layout.addWidget(label)
+    layout.addWidget(info_btn)
+    layout.addStretch()
     container = QWidget()
-    hl = QHBoxLayout(container)
-    hl.setContentsMargins(0, 0, 0, 0)
-    label = QLabel(translator.t(text_key))
-    info = QPushButton('?')
-    info.setToolTip(translator.t(tooltip_key))
-    info.setFixedSize(20, 20)
-    info.setCursor(Qt.PointingHandCursor)
-    hl.addWidget(label)
-    hl.addWidget(info)
-    if hasattr(translator, 'translations'):
-        translator.translations.append((label, 'setText', text_key))
-        translator.translations.append((info, 'setToolTip', tooltip_key))
+    container.setLayout(layout)
     return container
 
 def create_video_tab(parent, translations):
-    page = QWidget()
     layout = QVBoxLayout()
-
+    
     input_layout = QHBoxLayout()
     input_layout.addWidget(create_label_with_info(parent, 'input_video', 'input_video_tip'))
     parent.vid_input_edit = QLineEdit('')
@@ -189,7 +218,7 @@ def create_video_tab(parent, translations):
 
     target_layout = QHBoxLayout()
     target_layout.addWidget(create_label_with_info(parent, 'target_parts', 'target_parts_tip'))
-    parent.target_parts_edit = QLineEdit('0')
+    parent.target_parts_edit = QLineEdit('0~9')
     target_layout.addWidget(parent.target_parts_edit)
     layout.addLayout(target_layout)
 
@@ -210,13 +239,15 @@ def create_video_tab(parent, translations):
     parent.vid_progress = QProgressBar()
     layout.addWidget(parent.vid_progress)
 
-    parent.vid_run_btn = QPushButton(parent.t('run_video_upscale'))
-    parent.vid_run_btn.clicked.connect(parent.run_video_upscale)
-    layout.addWidget(parent.vid_run_btn)
-
     parent.vid_log = QTextEdit()
     parent.vid_log.setReadOnly(True)
     layout.addWidget(parent.vid_log)
 
-    page.setLayout(layout)
-    return page
+    parent.vid_run_btn = QPushButton(parent.t('run_upscale'))
+    parent.vid_run_btn.setFixedHeight(40)
+    parent.vid_run_btn.clicked.connect(parent.run_video_upscale)
+    layout.addWidget(parent.vid_run_btn)
+
+    tab = QWidget()
+    tab.setLayout(layout)
+    return tab

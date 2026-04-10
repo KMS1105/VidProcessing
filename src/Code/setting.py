@@ -1,7 +1,7 @@
 import platform
 import torch
 import subprocess
-import psutil # 시스템 정보 추출을 위해 필요합니다
+import psutil
 
 def get_intel_gpu_name():
     try:
@@ -9,10 +9,7 @@ def get_intel_gpu_name():
             cmd = "wmic path win32_VideoController get name"
             output = subprocess.check_output(cmd, shell=True).decode('utf-8')
             gpu_list = [line.strip() for line in output.split('\n') if "Intel" in line.strip()]
-            
             if not gpu_list: return None
-            
-            # 우선순위: Arc(외장) -> Iris(고성능 내장) -> UHD/기타(일반 내장)
             for keyword in ["Arc", "Iris", "Intel"]:
                 for gpu in gpu_list:
                     if keyword in gpu:
@@ -22,13 +19,10 @@ def get_intel_gpu_name():
     return None
 
 def get_detailed_system_info():
-    """launch.py 하단 정보창에 표시될 상세 시스템 사양 정보"""
     try:
         cpu = platform.processor() or "Unknown CPU"
         cpu_count = psutil.cpu_count(logical=True)
         mem = psutil.virtual_memory().total / (1024**3)
-        
-        # 외장 GPU(NVIDIA)가 있으면 그것을, 없으면 인텔 GPU를, 둘 다 없으면 None 표시
         gpu = "None"
         if torch.cuda.is_available():
             gpu = torch.cuda.get_device_name(0)
@@ -36,20 +30,16 @@ def get_detailed_system_info():
             intel = get_intel_gpu_name()
             if intel:
                 gpu = intel
-                
         return f"CPU: {cpu} ({cpu_count}T) | RAM: {mem:.1f}GB | GPU: {gpu}"
     except:
         return "System info retrieval failed"
 
 def format_time(seconds):
-    """초 단위 시간을 00:00:00 형식의 문자열로 변환"""
     if seconds is None or seconds < 0:
         return "--:--:--"
-    
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     seconds = int(seconds % 60)
-    
     if hours > 0:
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
     else:
@@ -85,14 +75,15 @@ UI_TEXTS = {
         'split_count': '분할 개수:',
         'split_count_tip': '비디오를 몇 개의 파트로 나눌지 지정합니다.',
         'target_parts': '대상 파트:',
-        'target_parts_tip': '업스케일할 파트 번호를 쉼표로 구분하여 입력합니다.\n시작 파트 번호는 0입니다.',
+        'target_parts_tip': "업스케일할 파트 범위를 입력하세요. (예: 0~5)\n시작 번호는 0이며, 쉼표로 여러 구간을 지정할 수 있습니다.\n\nEnter the part range to upscale. (e.g., 0~5)\nStarting index is 0. Multiple ranges can be separated by commas.",
         'tile_size': '타일 크기:',
         'tile_size_tip': 'Real-ESRGAN 블록 처리 크기입니다.\n0은 전체 프레임 처리, VRAM 부족 시 100~400 권장.',
         'browse': '찾아보기',
         'upscale_image': '이미지 업스케일 시작',
         'run_video_upscale': '비디오 업스케일 시작',
         'device_label': '장치: ',
-        'cpu_recommend': '[Intel QSV 가속 활성] 2x 권장, 분할 개수를 높여 처리하세요.',
+        'cpu_recommend': '[CPU 모드] {0} 사용 중. 속도가 매우 느릴 수 있습니다. 2x 권장 및 분할 개수를 최대한 높이세요.',
+        'igpu_recommend': '[Intel QSV 가속] {0} 사용 중. 2x 권장, 타일 크기를 200~400으로 조절하세요.',
         'gpu_recommend_high': 'GPU: {0} - 권장: 2x/4x 사용, 고해상도 시 tile 400~600 권장.',
         'gpu_recommend_mid': 'GPU: {0} - 권장: 2x 사용, tile 200~300 권장.',
         'gpu_recommend_low': 'GPU: {0} - 권장: 2x 사용, tile 100~200 권장 (VRAM 주의).',
@@ -141,14 +132,15 @@ UI_TEXTS = {
         'split_count': 'Split Count:',
         'split_count_tip': 'Set video split parts.',
         'target_parts': 'Target Parts:',
-        'target_parts_tip': 'Enter part numbers separated by commas.',
+        'target_parts_tip': "Enter the part range to upscale. (e.g., 0~5)\nStarting index is 0. Multiple ranges can be separated by commas.",
         'tile_size': 'Tile Size:',
         'tile_size_tip': '0 for whole frame, 100~400 recommended for stability.',
         'browse': 'Browse',
         'upscale_image': 'Start Image Upscale',
         'run_video_upscale': 'Start Video Upscale',
         'device_label': 'Device: ',
-        'cpu_recommend': '[Intel QSV Accel On] Use 2x, increase split count.',
+        'cpu_recommend': '[CPU Mode] Using {0}. Processing may be very slow. 2x recommended and increase split count.',
+        'igpu_recommend': '[Intel QSV Acceleration] Using {0}. 2x recommended, adjust tile size to 200~400.',
         'gpu_recommend_high': 'GPU: {0} - Recommended: 2x/4x, tile 400~600.',
         'gpu_recommend_mid': 'GPU: {0} - Recommended: 2x, tile 200~300.',
         'gpu_recommend_low': 'GPU: {0} - Recommended: 2x, tile 100~200.',
@@ -174,11 +166,9 @@ def get_device_info_text(lang='ko'):
     if torch.cuda.is_available():
         gpu_name = torch.cuda.get_device_name(0)
         return f"{UI_TEXTS[lang]['device_label']}GPU ({gpu_name})"
-    
     intel_gpu = get_intel_gpu_name()
     if intel_gpu:
         return f"{UI_TEXTS[lang]['device_label']}Intel GPU ({intel_gpu})"
-        
     cpu_name = platform.processor() or 'Unknown CPU'
     return f"{UI_TEXTS[lang]['device_label']}CPU ({cpu_name})"
 
@@ -192,10 +182,11 @@ def get_device_recommendation(lang='ko'):
         if any(kw in lower_name for kw in ['gtx', '1660', '1080', '1070']):
             return texts['gpu_recommend_mid'].format(gpu_name)
         return texts['gpu_recommend_low'].format(gpu_name)
-    
     intel_gpu = get_intel_gpu_name()
-    display_name = intel_gpu if intel_gpu else platform.processor() or 'Unknown CPU'
-    return texts['cpu_recommend'].format(display_name)
+    if intel_gpu:
+        return texts['igpu_recommend'].format(intel_gpu)
+    cpu_name = platform.processor() or 'Unknown CPU'
+    return texts['cpu_recommend'].format(cpu_name)
 
 def apply_app_theme(widget, theme):
     if theme == 'dark':
@@ -226,17 +217,10 @@ def apply_app_theme(widget, theme):
             QTabWidget::pane { border: 1px solid #dadce0; background-color: #ffffff; top: -1px; }
             QTabBar::tab { background-color: #f1f3f4; color: #5f6368; padding: 12px 25px; border: 1px solid #dadce0; border-top-left-radius: 8px; border-top-right-radius: 8px; margin-right: 4px; }
             QTabBar::tab:selected { background-color: #ffffff; color: #1a73e8; border-bottom: 3px solid #1a73e8; font-weight: bold; }
-            
-            QListWidget, QListView, QScrollArea, QAbstractScrollArea { 
-                background-color: #ffffff !important; 
-                color: #202124 !important; 
-                border: 1px solid #dadce0; 
-            }
+            QListWidget, QListView, QScrollArea, QAbstractScrollArea { background-color: #ffffff !important; color: #202124 !important; border: 1px solid #dadce0; }
             QListWidget::item { background-color: #ffffff; color: #202124; }
             QListWidget::item:selected { background-color: #e8f0fe; color: #1a73e8; }
-            
             QLabel { background-color: transparent !important; color: #202124 !important; }
             QGroupBox { border: 1px solid #dadce0; border-radius: 8px; margin-top: 10px; padding-top: 10px; background-color: #ffffff; }
         """
-    
     widget.setStyleSheet(style)

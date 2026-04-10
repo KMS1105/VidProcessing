@@ -20,6 +20,7 @@ except ImportError:
 
 class ImageUpscaleWorker(QThread):
     progress = pyqtSignal(int)
+    log = pyqtSignal(str)
     finished = pyqtSignal(str)
 
     def __init__(self, input_path, output_folder, scale):
@@ -42,108 +43,95 @@ class ImageUpscaleWorker(QThread):
             }
 
             model_base = model_filenames.get(self.scale, 'RealESRGAN_x2plus')
-            model_url = model_urls.get(self.scale, model_urls[2])
-            weights_dir = os.path.join(os.getcwd(), 'weights')
+            
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            weights_dir = os.path.join(base_dir, 'weights')
             os.makedirs(weights_dir, exist_ok=True)
+            
             pth_path = os.path.join(weights_dir, f"{model_base}.pth")
             xml_path = os.path.join(weights_dir, f"{model_base}.xml")
 
             if not os.path.exists(pth_path):
-                urllib.request.urlretrieve(model_url, pth_path)
+                self.log.emit(f"⏳ 모델 가중치 다운로드 중: {model_base}.pth")
+                urllib.request.urlretrieve(model_urls[self.scale], pth_path)
+                self.log.emit("✅ 다운로드 완료")
+            
+            self.progress.emit(20)
+
+            if torch.cuda.is_available():
+                device_name = "CUDA"
+            elif any("GPU" in d for d in available_devices):
+                device_name = "GPU"
+            else:
+                device_name = "CPU"
 
             from realesrgan import RealESRGANer
             from basicsr.archs.rrdbnet_arch import RRDBNet
 
-            # 1. NVIDIA CUDA 체크
-            if torch.cuda.is_available():
-                device_display_name = "NVIDIA CUDA"
-                model_arch = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=self.scale)
-                upsampler = RealESRGANer(scale=self.scale, model_path=pth_path, model=model_arch, tile=0, half=True, device='cuda')
-                img = cv2.imread(self.input_path, cv2.IMREAD_UNCHANGED)
-                output, _ = upsampler.enhance(img, outscale=self.scale)
-
-            # 2. Intel GPU (OpenVINO) 체크
-            elif any("GPU" in d for d in available_devices):
-                gpu_device = "GPU.1" if "GPU.1" in available_devices else "GPU.0"
-                device_display_name = f"Intel {gpu_device} (OpenVINO)"
-
-                img = cv2.imread(self.input_path, cv2.IMREAD_UNCHANGED)
-                if img is None: return
-                
-                # 오류 방지: 이미지 크기를 짝수로 패딩 (중요!)
-                h, w = img.shape[:2]
-                new_h = (h // 4) * 4
-                new_w = (w // 4) * 4
-                if h != new_h or w != new_w:
-                    img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
-
+            if device_name == "GPU":
+                gpu_id = "GPU.1" if "GPU.1" in available_devices else "GPU.0"
                 if not os.path.exists(xml_path):
-                    model_arch = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=self.scale)
+                    self.log.emit(f"🔄 Intel GPU 최적화 변환 중: {model_base}.xml")
+                    model_temp = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=self.scale)
                     loadnet = torch.load(pth_path, map_location='cpu')
-                    model_arch.load_state_dict(loadnet['params_ema'] if 'params_ema' in loadnet else loadnet, strict=True)
-                    model_arch.eval()
-                    # 모델을 동적 입력이 가능하도록 변환
-                    dummy_input = torch.randn(1, 3, new_h, new_w)
-                    ov_model = ov.convert_model(model_arch, example_input=dummy_input)
+                    model_temp.load_state_dict(loadnet['params_ema'] if 'params_ema' in loadnet else loadnet, strict=True)
+                    model_temp.eval()
+                    dummy = torch.randn(1, 3, 256, 256)
+                    ov_model = ov.convert_model(model_temp, example_input=dummy)
                     ov.save_model(ov_model, xml_path)
-
-                # 모델 로드 및 입력 크기 재조정 (이미지 크기에 맞춤)
-                model = core.read_model(xml_path)
-                model.reshape([1, 3, new_h, new_w]) 
-                compiled_model = core.compile_model(model, gpu_device)
+                    self.log.emit("✅ 모델 변환 완료")
                 
-                input_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-                input_img = input_img.transpose(2, 0, 1)[np.newaxis, ...]
+                img = cv2.imread(self.input_path)
+                h, w = img.shape[:2]
+                new_h, new_w = (h // 4) * 4, (w // 4) * 4
+                img = cv2.resize(img, (new_w, new_h))
                 
-                result = compiled_model(input_img)[compiled_model.output(0)]
-                output = np.squeeze(result).clip(0, 1).transpose(1, 2, 0)
-                output = (output * 255.0).astype(np.uint8)
-                output = cv2.cvtColor(output, cv2.COLOR_RGB2BGR)
-
-            # 3. CPU
+                ov_model_loaded = core.read_model(xml_path)
+                ov_model_loaded.reshape([1, 3, new_h, new_w])
+                compiled_model = core.compile_model(ov_model_loaded, gpu_id)
+                
+                input_data = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+                input_data = input_data.transpose(2, 0, 1)[np.newaxis, ...]
+                res = compiled_model(input_data)[compiled_model.output(0)]
+                output = np.squeeze(res).clip(0, 1).transpose(1, 2, 0)
+                output = cv2.cvtColor((output * 255.0).astype(np.uint8), cv2.COLOR_RGB2BGR)
             else:
-                device_display_name = "CPU"
                 model_arch = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=self.scale)
-                upsampler = RealESRGANer(scale=self.scale, model_path=pth_path, model=model_arch, tile=0, device='cpu')
-                img = cv2.imread(self.input_path, cv2.IMREAD_UNCHANGED)
+                upsampler = RealESRGANer(scale=self.scale, model_path=pth_path, model=model_arch, tile=400, half=(device_name=="CUDA"), device='cuda' if device_name=="CUDA" else 'cpu')
+                img = cv2.imread(self.input_path)
                 output, _ = upsampler.enhance(img, outscale=self.scale)
 
             self.progress.emit(80)
-            os.makedirs(self.output_folder, exist_ok=True)
-            input_basename = os.path.splitext(os.path.basename(self.input_path))[0]
-            output_file = os.path.join(self.output_folder, f"{input_basename}_x{self.scale}.png")
-            cv2.imwrite(output_file, output)
+            
+            if not os.path.exists(self.output_folder):
+                os.makedirs(self.output_folder)
+            
+            base_name = os.path.splitext(os.path.basename(self.input_path))[0]
+            save_path = os.path.join(self.output_folder, f"{base_name}_x{self.scale}.png")
+            cv2.imwrite(save_path, output)
             
             self.progress.emit(100)
-            self.finished.emit(f"✨ 완료 ({device_display_name}): {os.path.abspath(output_file)}")
-
+            self.finished.emit(f"✨ 완료: {save_path}")
         except Exception as e:
             self.finished.emit(f"❌ 오류: {str(e)}")
 
-def create_label_with_info(translator, text_key, tooltip_key):
+def create_label_with_info(parent, text_key, tip_key):
+    layout = QHBoxLayout()
+    label = QLabel(parent.t(text_key))
+    info_btn = QPushButton("?")
+    info_btn.setFixedSize(20, 20)
+    info_btn.setToolTip(parent.t(tip_key))
+    info_btn.setStyleSheet("QPushButton { border-radius: 10px; background-color: #e0e0e0; font-weight: bold; }")
+    layout.addWidget(label)
+    layout.addWidget(info_btn)
+    layout.addStretch()
     container = QWidget()
-    hl = QHBoxLayout(container)
-    hl.setContentsMargins(0, 0, 0, 0)
-
-    label = QLabel(translator.t(text_key))
-    info = QPushButton('?')
-    info.setToolTip(translator.t(tooltip_key))
-    info.setFixedSize(20, 20)
-    info.setCursor(Qt.PointingHandCursor)
-
-    hl.addWidget(label)
-    hl.addWidget(info)
-
-    if hasattr(translator, 'translations'):
-        translator.translations.append((label, 'setText', text_key))
-        translator.translations.append((info, 'setToolTip', tooltip_key))
-
+    container.setLayout(layout)
     return container
 
 def create_image_tab(parent, translations):
-    page = QWidget()
     layout = QVBoxLayout()
-
+    
     input_layout = QHBoxLayout()
     input_layout.addWidget(create_label_with_info(parent, 'input_image', 'input_image_tip'))
     parent.img_input_edit = QLineEdit('')
@@ -178,13 +166,15 @@ def create_image_tab(parent, translations):
     parent.img_progress = QProgressBar()
     layout.addWidget(parent.img_progress)
 
-    parent.img_run_btn = QPushButton(parent.t('upscale_image'))
-    parent.img_run_btn.clicked.connect(parent.run_image_upscale)
-    layout.addWidget(parent.img_run_btn)
-
     parent.img_log = QTextEdit()
     parent.img_log.setReadOnly(True)
     layout.addWidget(parent.img_log)
 
-    page.setLayout(layout)
-    return page
+    parent.img_run_btn = QPushButton(parent.t('upscale_image'))
+    parent.img_run_btn.setFixedHeight(40)
+    parent.img_run_btn.clicked.connect(parent.run_image_upscale)
+    layout.addWidget(parent.img_run_btn)
+
+    tab = QWidget()
+    tab.setLayout(layout)
+    return tab

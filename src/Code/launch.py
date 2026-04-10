@@ -1,3 +1,5 @@
+#Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+
 import sys
 import os
 import time
@@ -244,7 +246,7 @@ class UpscaleApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.language = 'ko'
-        self.theme = 'dark'
+        self.theme = 'light'
         self.translations = []
         self.initUI()
 
@@ -399,6 +401,7 @@ class UpscaleApp(QMainWindow):
         
         self.img_worker = ImageUpscaleWorker(input_path, output_folder, scale)
         self.img_worker.progress.connect(self.img_progress.setValue)
+        self.img_worker.log.connect(self.img_log.append)
         self.img_worker.finished.connect(self.on_image_finished)
         self.img_worker.start()
 
@@ -411,11 +414,21 @@ class UpscaleApp(QMainWindow):
         input_path = self.vid_input_edit.text()
         output_folder = self.vid_output_edit.text()
         num_splits = self.split_spin.value()
+        
         try:
-            target_parts = [int(x.strip()) for x in self.target_parts_edit.text().split(',')]
-        except:
-            QMessageBox.warning(self, "Error", "Invalid target parts.")
+            raw_text = self.target_parts_edit.text()
+            target_parts = []
+            for item in raw_text.split(','):
+                if '~' in item:
+                    start, end = map(int, item.split('~'))
+                    target_parts.extend(range(start, end + 1))
+                else:
+                    target_parts.append(int(item.strip()))
+            target_parts = list(set(target_parts)) # 중복 제거
+        except Exception:
+            QMessageBox.warning(self, "Error", "Invalid target parts. Use format '0~2' or '0,1,2'")
             return
+        
         tile = self.tile_spin.value()
         scale = int(self.vid_scale_combo.currentText().replace('x', ''))
         
