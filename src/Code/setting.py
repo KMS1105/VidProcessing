@@ -1,6 +1,7 @@
 import platform
 import torch
 import subprocess
+import psutil # 시스템 정보 추출을 위해 필요합니다
 
 def get_intel_gpu_name():
     try:
@@ -19,6 +20,40 @@ def get_intel_gpu_name():
     except:
         pass
     return None
+
+def get_detailed_system_info():
+    """launch.py 하단 정보창에 표시될 상세 시스템 사양 정보"""
+    try:
+        cpu = platform.processor() or "Unknown CPU"
+        cpu_count = psutil.cpu_count(logical=True)
+        mem = psutil.virtual_memory().total / (1024**3)
+        
+        # 외장 GPU(NVIDIA)가 있으면 그것을, 없으면 인텔 GPU를, 둘 다 없으면 None 표시
+        gpu = "None"
+        if torch.cuda.is_available():
+            gpu = torch.cuda.get_device_name(0)
+        else:
+            intel = get_intel_gpu_name()
+            if intel:
+                gpu = intel
+                
+        return f"CPU: {cpu} ({cpu_count}T) | RAM: {mem:.1f}GB | GPU: {gpu}"
+    except:
+        return "System info retrieval failed"
+
+def format_time(seconds):
+    """초 단위 시간을 00:00:00 형식의 문자열로 변환"""
+    if seconds is None or seconds < 0:
+        return "--:--:--"
+    
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    seconds = int(seconds % 60)
+    
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    else:
+        return f"{minutes:02d}:{seconds:02d}"
 
 UI_TEXTS = {
     'ko': {
@@ -57,7 +92,7 @@ UI_TEXTS = {
         'upscale_image': '이미지 업스케일 시작',
         'run_video_upscale': '비디오 업스케일 시작',
         'device_label': '장치: ',
-        'cpu_recommend': '장치: {0}\n[Intel QSV 가속 활성] 2x 권장, 분할 개수를 높여 처리하세요.',
+        'cpu_recommend': '[Intel QSV 가속 활성] 2x 권장, 분할 개수를 높여 처리하세요.',
         'gpu_recommend_high': 'GPU: {0} - 권장: 2x/4x 사용, 고해상도 시 tile 400~600 권장.',
         'gpu_recommend_mid': 'GPU: {0} - 권장: 2x 사용, tile 200~300 권장.',
         'gpu_recommend_low': 'GPU: {0} - 권장: 2x 사용, tile 100~200 권장 (VRAM 주의).',
@@ -69,13 +104,13 @@ UI_TEXTS = {
         'error_target_parts': '❌ 파트 번호는 숫자로 입력하세요.',
         'error_no_target_parts': '❌ 대상 파트를 지정하세요.',
         'video_timeline': '타임라인 (병합 순서)',
-        'timeline_preview_msg': '영상을 추가하여 시퀀스를 구성하세요.',
         'video_sources': '소스 미디어 리스트',
         'add': '가져오기',
+        'add_to_timeline': '타임라인에 추가',
         'remove': '삭제',
         'clear': '비우기',
-        'merge_quality': '내보내기 화질 (Intel QSV 가속 적용)',
-        'export_video': '최종 영상 내보내기',
+        'merge_quality': '화질 최적화 (자동 설정됨)',
+        'export_video': '자동 최적화 내보내기 시작 (Intel QSV 가속)',
     },
     'en': {
         'tab_video_merge': 'Video Editor',
@@ -113,7 +148,7 @@ UI_TEXTS = {
         'upscale_image': 'Start Image Upscale',
         'run_video_upscale': 'Start Video Upscale',
         'device_label': 'Device: ',
-        'cpu_recommend': 'Device: {0}\n[Intel QSV Accel On] Use 2x, increase split count.',
+        'cpu_recommend': '[Intel QSV Accel On] Use 2x, increase split count.',
         'gpu_recommend_high': 'GPU: {0} - Recommended: 2x/4x, tile 400~600.',
         'gpu_recommend_mid': 'GPU: {0} - Recommended: 2x, tile 200~300.',
         'gpu_recommend_low': 'GPU: {0} - Recommended: 2x, tile 100~200.',
@@ -125,13 +160,13 @@ UI_TEXTS = {
         'error_target_parts': '❌ Parts must be integers.',
         'error_no_target_parts': '❌ Enter target part.',
         'video_timeline': 'Timeline (Merge Order)',
-        'timeline_preview_msg': 'Add videos to build sequence.',
         'video_sources': 'Source Media List',
-        'add': 'Add',
+        'add': 'Import',
+        'add_to_timeline': 'Add to Timeline',
         'remove': 'Remove',
         'clear': 'Clear',
-        'merge_quality': 'Export Quality (Intel QSV Accel On)',
-        'export_video': 'Export Video',
+        'merge_quality': 'Quality Optimized (Auto)',
+        'export_video': 'Start Optimized Export (Intel QSV Accel)',
     }
 }
 
@@ -164,7 +199,7 @@ def get_device_recommendation(lang='ko'):
 
 def apply_app_theme(widget, theme):
     if theme == 'dark':
-        widget.setStyleSheet("""
+        style = """
             QMainWindow { background-color: #121212; }
             QWidget { background-color: #1e1e1e; color: #e0e0e0; font-family: 'Malgun Gothic', sans-serif; font-size: 13px; }
             QToolTip { background-color: #333333; color: #ffffff; border: 1px solid #00bcff; border-radius: 4px; padding: 5px; }
@@ -176,13 +211,14 @@ def apply_app_theme(widget, theme):
             QTabWidget::pane { border: 1px solid #3e3e42; background-color: #1e1e1e; top: -1px; }
             QTabBar::tab { background-color: #121212; color: #888888; padding: 12px 25px; border: 1px solid #3e3e42; border-top-left-radius: 8px; border-top-right-radius: 8px; margin-right: 4px; }
             QTabBar::tab:selected { background-color: #1e1e1e; color: #00bcff; border-bottom: 3px solid #00bcff; font-weight: bold; }
-        """)
+            QListWidget { background-color: #2d2d2d; color: #ffffff; border: 1px solid #3e3e42; }
+        """
     else:
-        widget.setStyleSheet("""
-            QMainWindow { background-color: #f0f2f5; }
+        style = """
+            QMainWindow { background-color: #f5f5f7; }
             QWidget { background-color: #ffffff; color: #202124; font-family: 'Malgun Gothic', sans-serif; font-size: 13px; }
-            QToolTip { background-color: #202124; color: #ffffff; border: 1px solid #202124; border-radius: 4px; padding: 8px; }
-            QLineEdit, QTextEdit, QComboBox, QSpinBox { background-color: #f8f9fa; color: #202124; border: 1px solid #dadce0; border-radius: 6px; padding: 5px; }
+            QToolTip { background-color: #ffffff; color: #202124; border: 1px solid #dadce0; border-radius: 4px; padding: 8px; }
+            QLineEdit, QTextEdit, QComboBox, QSpinBox { background-color: #ffffff; color: #202124; border: 1px solid #dadce0; border-radius: 6px; padding: 5px; }
             QPushButton { background-color: #1a73e8; color: #ffffff; border: none; border-radius: 6px; padding: 8px 15px; font-weight: bold; }
             QPushButton:hover { background-color: #185abc; }
             QProgressBar { background-color: #e8eaed; border: 1px solid #dadce0; border-radius: 8px; text-align: center; color: #3c4043; }
@@ -190,4 +226,17 @@ def apply_app_theme(widget, theme):
             QTabWidget::pane { border: 1px solid #dadce0; background-color: #ffffff; top: -1px; }
             QTabBar::tab { background-color: #f1f3f4; color: #5f6368; padding: 12px 25px; border: 1px solid #dadce0; border-top-left-radius: 8px; border-top-right-radius: 8px; margin-right: 4px; }
             QTabBar::tab:selected { background-color: #ffffff; color: #1a73e8; border-bottom: 3px solid #1a73e8; font-weight: bold; }
-        """)
+            
+            QListWidget, QListView, QScrollArea, QAbstractScrollArea { 
+                background-color: #ffffff !important; 
+                color: #202124 !important; 
+                border: 1px solid #dadce0; 
+            }
+            QListWidget::item { background-color: #ffffff; color: #202124; }
+            QListWidget::item:selected { background-color: #e8f0fe; color: #1a73e8; }
+            
+            QLabel { background-color: transparent !important; color: #202124 !important; }
+            QGroupBox { border: 1px solid #dadce0; border-radius: 8px; margin-top: 10px; padding-top: 10px; background-color: #ffffff; }
+        """
+    
+    widget.setStyleSheet(style)

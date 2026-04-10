@@ -1,38 +1,53 @@
-import os
 import sys
-import re
+import os
+import time
+import platform
+import logging
+import subprocess
+from PyQt5.QtWidgets import (
+    QMainWindow, QApplication, QTabWidget, QWidget, QVBoxLayout, 
+    QHBoxLayout, QLabel, QPushButton, QListWidget, QListWidgetItem,
+    QAbstractItemView, QFileDialog, QMessageBox, QListView, QLineEdit,
+    QProgressBar, QTextEdit, QComboBox, QSpinBox, QFrame, QMenuBar, QMenu,
+    QSizePolicy, QDesktopWidget
+)
+from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QRect
+from PyQt5.QtGui import QIcon, QFont, QPixmap, QColor
+from moviepy.editor import VideoFileClip, concatenate_videoclips
 
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-os.environ["OMP_NUM_THREADS"] = "4" 
-
-dll_path = os.path.join(sys.prefix, 'Lib', 'site-packages', 'torch', 'lib')
-if os.path.exists(dll_path):
-    os.add_dll_directory(dll_path)
-
-from PyQt5.QtWidgets import (QApplication, QWidget, QTabWidget, QVBoxLayout, 
-                             QMenuBar, QFileDialog, QHBoxLayout, QLabel, 
-                             QPushButton, QListWidget, QListWidgetItem, QAbstractItemView, 
-                             QMessageBox, QSlider, QListView)
-from PyQt5.QtCore import Qt, QSize
-
-from setting import UI_TEXTS, get_device_info_text, get_device_recommendation, apply_app_theme
+from setting import (
+    UI_TEXTS, apply_app_theme, get_device_info_text, 
+    get_device_recommendation, get_detailed_system_info
+)
 from UpscaleImg import create_image_tab, ImageUpscaleWorker
 from UpscaleVid import create_video_tab, VideoUpscaleWorker
 
-from moviepy.editor import VideoFileClip, concatenate_videoclips
-
-def merge_videos(video_paths, output_path, quality=23):
+def merge_videos(video_paths, output_path):
     if not video_paths:
         return
     
     clips = []
     try:
         for path in video_paths:
-            clip = VideoFileClip(path)
-            if clips and (clip.size != clips[0].size):
-                clip = clip.resize(width=clips[0].size[0], height=clips[0].size[1])
-            clips.append(clip)
+            if not os.path.exists(path):
+                continue
+            
+            try:
+                clip = VideoFileClip(path)
+                if clips:
+                    target_size = clips[0].size
+                    if clip.size[0] != target_size[0] or clip.size[1] != target_size[1]:
+                        clip = clip.resize(newsize=target_size)
+                    if clip.fps != clips[0].fps:
+                        clip = clip.set_fps(clips[0].fps)
+                clips.append(clip)
+            except Exception as e:
+                print(f"Error loading clip {path}: {e}")
+                continue
         
+        if not clips:
+            return
+
         final_clip = concatenate_videoclips(clips, method="compose")
         
         try:
@@ -40,15 +55,18 @@ def merge_videos(video_paths, output_path, quality=23):
                 output_path, 
                 codec="h264_qsv", 
                 audio_codec="aac",
-                ffmpeg_params=["-global_quality", str(quality), "-look_ahead", "1"]
+                temp_audiofile='temp-audio.m4a',
+                remove_temp=True,
+                ffmpeg_params=["-global_quality", "23"]
             )
-        except Exception as e:
-            print(f"QSV error: {e}")
+        except:
             final_clip.write_videofile(
                 output_path, 
                 codec="libx264", 
                 audio_codec="aac", 
-                ffmpeg_params=["-crf", str(quality)]
+                temp_audiofile='temp-audio.m4a',
+                remove_temp=True,
+                ffmpeg_params=["-crf", "23"]
             )
         
         for clip in clips:
@@ -64,305 +82,363 @@ class VideoMergeTab(QWidget):
         self.initUI()
 
     def initUI(self):
-        layout = QVBoxLayout()
-        layout.setSpacing(15)
+        self.main_layout = QVBoxLayout()
+        self.main_layout.setContentsMargins(25, 25, 25, 25)
+        self.main_layout.setSpacing(15)
 
         self.timeline_title = QLabel()
-        layout.addWidget(self.timeline_title)
+        self.timeline_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #00bcff;")
+        self.main_layout.addWidget(self.timeline_title)
         
         self.timeline_list = QListWidget()
-        self.timeline_list.setFlow(QListWidget.LeftToRight) 
-        self.timeline_list.setViewMode(QListWidget.IconMode) 
+        self.timeline_list.setFlow(QListWidget.LeftToRight)
+        self.timeline_list.setViewMode(QListWidget.IconMode)
         self.timeline_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.timeline_list.setDefaultDropAction(Qt.MoveAction)
         self.timeline_list.setMovement(QListView.Snap)
         self.timeline_list.setResizeMode(QListWidget.Adjust)
-        self.timeline_list.setIconSize(QSize(100, 60))
-        self.timeline_list.setMinimumHeight(160)
-        self.timeline_list.setSpacing(10)
+        self.timeline_list.setMinimumHeight(200)
+        self.timeline_list.setIconSize(QSize(120, 70))
+        self.timeline_list.setSpacing(15)
         self.timeline_list.setStyleSheet("""
             QListWidget { 
-                background-color: #1e1e1e; 
-                border-radius: 10px; 
+                background-color: #161616; 
                 border: 2px dashed #333; 
+                border-radius: 12px; 
                 padding: 10px;
             }
             QListWidget::item { 
-                background-color: #3d5afe; 
+                background-color: #252525; 
                 color: white; 
-                border-radius: 5px;
-                margin-right: 5px;
+                border-radius: 8px;
+                border: 1px solid #444;
             }
-            QListWidget::item:selected { border: 2px solid #ffffff; }
+            QListWidget::item:selected { 
+                background-color: #3d5afe; 
+                border: 2px solid #ffffff; 
+            }
         """)
-        layout.addWidget(self.timeline_list)
+        self.main_layout.addWidget(self.timeline_list)
 
-        mid_layout = QHBoxLayout()
+        self.mid_container = QHBoxLayout()
+        self.mid_container.setSpacing(15)
         
-        list_container = QVBoxLayout()
+        self.source_container = QVBoxLayout()
+        self.source_label = QLabel()
+        self.source_label.setStyleSheet("font-weight: bold;")
         self.source_list = QListWidget()
         self.source_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.source_list.setStyleSheet("QListWidget { background-color: #2d2d2d; color: #ccc; }")
+        self.source_list.setDragEnabled(True)
+        self.source_list.setStyleSheet("background-color: #222; border-radius: 8px;")
         
-        self.source_label = QLabel()
-        list_container.addWidget(self.source_label)
-        list_container.addWidget(self.source_list)
-        mid_layout.addLayout(list_container, 7)
+        self.source_container.addWidget(self.source_label)
+        self.source_container.addWidget(self.source_list)
+        
+        self.mid_container.addLayout(self.source_container, 8)
 
-        side_btn_layout = QVBoxLayout()
-        side_btn_layout.setAlignment(Qt.AlignTop)
+        self.btn_panel = QVBoxLayout()
+        self.btn_panel.setAlignment(Qt.AlignTop)
+        self.btn_panel.setSpacing(10)
         
-        self.btn_add = QPushButton() 
-        self.btn_to_timeline = QPushButton() 
-        self.btn_remove = QPushButton() 
-        self.btn_clear = QPushButton() 
+        self.btn_add = QPushButton()
+        self.btn_to_timeline = QPushButton()
+        self.btn_remove = QPushButton()
+        self.btn_clear = QPushButton()
         
-        self.btn_to_timeline.setStyleSheet("background-color: #3d5afe; color: white; font-weight: bold;")
-        
-        for btn in [self.btn_add, self.btn_to_timeline, self.btn_remove, self.btn_clear]:
-            btn.setFixedWidth(110)
-            side_btn_layout.addWidget(btn)
-        
-        mid_layout.addLayout(side_btn_layout, 1)
-        layout.addLayout(mid_layout)
+        self.buttons = [self.btn_add, self.btn_to_timeline, self.btn_remove, self.btn_clear]
+        for btn in self.buttons:
+            btn.setFixedWidth(130)
+            btn.setFixedHeight(38)
+            btn.setCursor(Qt.PointingHandCursor)
+            self.btn_panel.addWidget(btn)
+            
+        self.mid_container.addLayout(self.btn_panel, 2)
+        self.main_layout.addLayout(self.mid_container)
 
-        bottom_layout = QHBoxLayout()
-        settings_group = QVBoxLayout()
-        self.quality_label = QLabel()
-        self.quality_slider = QSlider(Qt.Horizontal)
-        self.quality_slider.setRange(18, 32)
-        self.quality_slider.setValue(23)
-        settings_group.addWidget(self.quality_label)
-        settings_group.addWidget(self.quality_slider)
-        bottom_layout.addLayout(settings_group, 4)
+        self.line_sep = QFrame()
+        self.line_sep.setFrameShape(QFrame.HLine)
+        self.line_sep.setFrameShadow(QFrame.Sunken)
+        self.line_sep.setStyleSheet("background-color: #333;")
+        self.main_layout.addWidget(self.line_sep)
 
         self.btn_run = QPushButton()
-        self.btn_run.setFixedHeight(50)
-        bottom_layout.addWidget(self.btn_run, 6)
-        
-        layout.addLayout(bottom_layout)
-        self.setLayout(layout)
+        self.btn_run.setFixedHeight(55)
+        self.btn_run.setCursor(Qt.PointingHandCursor)
+        self.main_layout.addWidget(self.btn_run)
+
+        self.setLayout(self.main_layout)
 
         self.btn_add.clicked.connect(self.import_videos)
         self.btn_to_timeline.clicked.connect(self.add_to_timeline)
         self.btn_remove.clicked.connect(self.remove_from_timeline)
-        self.btn_clear.clicked.connect(self.timeline_list.clear)
+        self.btn_clear.clicked.connect(self.clear_all)
         self.btn_run.clicked.connect(self.run_video_merge)
 
     def import_videos(self):
-        files, _ = QFileDialog.getOpenFileNames(self, 'Select Videos', '', 'Videos (*.mp4 *.mov *.avi *.mkv)')
+        files, _ = QFileDialog.getOpenFileNames(
+            self, 'Select Media', '', 'Video Files (*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.webm)'
+        )
         if files:
-            self.source_list.addItems(files)
+            for f in files:
+                self.source_list.addItem(f)
 
     def add_to_timeline(self):
-        selected_items = self.source_list.selectedItems()
-        if not selected_items: return
-            
-        for item in selected_items:
-            file_path = item.text()
-            file_name = os.path.basename(file_path)
-            new_item = QListWidgetItem(file_name)
-            new_item.setData(Qt.UserRole, file_path)
-            new_item.setTextAlignment(Qt.AlignCenter)
-            new_item.setSizeHint(QSize(120, 80))
-            self.timeline_list.addItem(new_item)
+        selected = self.source_list.selectedItems()
+        if not selected:
+            return
+        for item in selected:
+            path = item.text()
+            name = os.path.basename(path)
+            list_item = QListWidgetItem(name)
+            list_item.setData(Qt.UserRole, path)
+            list_item.setTextAlignment(Qt.AlignCenter)
+            list_item.setSizeHint(QSize(140, 90))
+            self.timeline_list.addItem(list_item)
 
     def remove_from_timeline(self):
-        for item in self.timeline_list.selectedItems():
+        items = self.timeline_list.selectedItems()
+        if not items:
+            return
+        for item in items:
             self.timeline_list.takeItem(self.timeline_list.row(item))
+
+    def clear_all(self):
+        if self.timeline_list.count() == 0:
+            return
+        reply = QMessageBox.question(
+            self, 'Confirm', 'Clear all items in timeline?', 
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self.timeline_list.clear()
 
     def run_video_merge(self):
         count = self.timeline_list.count()
         if count < 2:
             QMessageBox.warning(self, "Warning", self.main_app.t('error_min_videos'))
             return
-
-        video_paths = [self.timeline_list.item(i).data(Qt.UserRole) for i in range(count)]
-        save_path, _ = QFileDialog.getSaveFileName(self, 'Export Video', 'merged_video.mp4', 'Video (*.mp4)')
+        
+        video_paths = []
+        for i in range(count):
+            video_paths.append(self.timeline_list.item(i).data(Qt.UserRole))
+            
+        save_path, _ = QFileDialog.getSaveFileName(
+            self, 'Save Merged Video', 'final_output.mp4', 'Video (*.mp4)'
+        )
+        
         if save_path:
+            self.btn_run.setEnabled(False)
+            self.btn_run.setText("Processing...")
+            QApplication.setOverrideCursor(Qt.WaitCursor)
             try:
-                quality_val = self.quality_slider.value()
-                merge_videos(video_paths, save_path, quality_val)
+                merge_videos(video_paths, save_path)
                 QMessageBox.information(self, "Success", self.main_app.t('success_merge'))
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"{str(e)}")
+                QMessageBox.critical(self, "Error", f"Failure: {str(e)}")
+            finally:
+                self.btn_run.setEnabled(True)
+                self.btn_run.setText(self.main_app.t('export_video'))
+                QApplication.restoreOverrideCursor()
 
-class UpscaleApp(QWidget):
+class UpscaleApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.language = 'ko'
-        self.theme = 'light'
-        self.ui_texts = UI_TEXTS
+        self.theme = 'dark'
         self.translations = []
         self.initUI()
 
     def initUI(self):
-        self.setWindowTitle('Upscaler')
-        self.setGeometry(120, 120, 780, 700) 
-        self.menu_bar = QMenuBar()
-        main_layout = QVBoxLayout()
-        main_layout.setMenuBar(self.menu_bar)
+        self.resize(1050, 850)
+        self.setMinimumSize(950, 750)
+        
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        self.base_layout = QVBoxLayout(self.central_widget)
         
         self.tabs = QTabWidget()
-        self.tabs.addTab(create_image_tab(self, self.translations), self.t('tab_image'))
-        self.tabs.addTab(create_video_tab(self, self.translations), self.t('tab_video'))
+        self.tabs.setDocumentMode(True)
         
+        self.image_tab = create_image_tab(self, self.translations)
+        self.video_tab = create_video_tab(self, self.translations)
         self.video_merge_tab = VideoMergeTab(self)
-        self.tabs.addTab(self.video_merge_tab, self.t('tab_video_merge'))
         
-        main_layout.addWidget(self.tabs)
-        self.set_menu()
-        self.setLayout(main_layout)
-        self.set_theme(self.theme)
+        self.tabs.addTab(self.image_tab, "")
+        self.tabs.addTab(self.video_tab, "")
+        self.tabs.addTab(self.video_merge_tab, "")
+        
+        self.base_layout.addWidget(self.tabs)
+        
+        self.info_panel = QHBoxLayout()
+        self.sys_info_label = QLabel()
+        self.sys_info_label.setStyleSheet("color: #777; font-size: 11px; padding-left: 10px; font-family: 'Consolas';")
+        self.info_panel.addWidget(self.sys_info_label)
+        self.base_layout.addLayout(self.info_panel)
+
         self.update_language()
+        apply_app_theme(self, self.theme)
+        self.sys_info_label.setText(get_detailed_system_info())
+        
+        qr = self.frameGeometry()
+        cp = QDesktopWidget().availableGeometry().center()
+        qr.moveCenter(cp)
+        self.move(qr.topLeft())
+        
+        self.show()
 
     def t(self, key):
-        return self.ui_texts[self.language].get(key, key)
+        return UI_TEXTS[self.language].get(key, key)
 
     def set_menu(self):
-        self.menu_bar.clear()
-        theme_menu = self.menu_bar.addMenu(self.t('menu_theme'))
-        theme_menu.addAction(self.t('menu_light'), lambda: self.set_theme('light'))
-        theme_menu.addAction(self.t('menu_dark'), lambda: self.set_theme('dark'))
-        lang_menu = self.menu_bar.addMenu(self.t('menu_language'))
-        lang_menu.addAction(self.t('lang_ko'), lambda: self.set_language('ko'))
-        lang_menu.addAction(self.t('lang_en'), lambda: self.set_language('en'))
+        self.menuBar().clear()
+        
+        theme_menu = self.menuBar().addMenu(self.t('menu_theme'))
+        theme_menu.addAction(self.t('menu_light'), lambda: self.change_theme('light'))
+        theme_menu.addAction(self.t('menu_dark'), lambda: self.change_theme('dark'))
+        
+        lang_menu = self.menuBar().addMenu(self.t('menu_language'))
+        lang_menu.addAction(self.t('lang_ko'), lambda: self.change_language('ko'))
+        lang_menu.addAction(self.t('lang_en'), lambda: self.change_language('en'))
 
-    def set_theme(self, theme):
+    def change_theme(self, theme):
         self.theme = theme
-        apply_app_theme(self, theme)
+        apply_app_theme(self, self.theme)
+        for widget in self.findChildren(QWidget):
+            apply_app_theme(widget, self.theme)
+            
+        if hasattr(self, 'video_merge_tab'):
+            from PyQt5.QtWidgets import QListWidget
+            for list_widget in self.video_merge_tab.findChildren(QListWidget):
+                apply_app_theme(list_widget, self.theme)
 
-    def set_language(self, language):
-        self.language = language
+    def change_language(self, lang):
+        self.language = lang
         self.update_language()
 
+    def browse_image_input(self):
+        file, _ = QFileDialog.getOpenFileName(self, self.t('input_image'), '', 'Images (*.png *.jpg *.jpeg *.webp *.bmp)')
+        if file:
+            self.img_input_edit.setText(file)
+
+    def browse_video_input(self):
+        file, _ = QFileDialog.getOpenFileName(self, self.t('input_video'), '', 'Videos (*.mp4 *.avi *.mkv *.mov)')
+        if file:
+            self.vid_input_edit.setText(file)
+
+    def browse_output_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, self.t('output_folder'))
+        if folder:
+            if self.tabs.currentIndex() == 0:
+                self.img_output_edit.setText(folder)
+            else:
+                self.vid_output_edit.setText(folder)
+
     def update_language(self):
-        self.setWindowTitle(self.t('window_title'))
+        lang = self.language
+        self.setWindowTitle(UI_TEXTS[lang]['window_title'])
         self.set_menu()
-        self.tabs.setTabText(0, self.t('tab_image'))
-        self.tabs.setTabText(1, self.t('tab_video'))
-        self.tabs.setTabText(2, self.t('tab_video_merge'))
         
-        for widget, method, key in self.translations:
-            if hasattr(widget, method):
-                getattr(widget, method)(self.t(key))
-            
-        self.img_device_label.setText(get_device_info_text(self.language))
-        self.vid_device_label.setText(get_device_info_text(self.language))
-        self.img_recommend_label.setText(get_device_recommendation(self.language))
-        self.vid_recommend_label.setText(get_device_recommendation(self.language))
+        self.tabs.setTabText(0, UI_TEXTS[lang]['tab_image'])
+        self.tabs.setTabText(1, UI_TEXTS[lang]['tab_video'])
+        self.tabs.setTabText(2, UI_TEXTS[lang]['tab_video_merge'])
         
-        self.img_run_btn.setText(self.t('upscale_image'))
-        self.vid_run_btn.setText(self.t('run_video_upscale'))
+        self.img_device_label.setText(get_device_info_text(lang))
+        self.vid_device_label.setText(get_device_info_text(lang))
+        self.img_recommend_label.setText(get_device_recommendation(lang))
+        self.vid_recommend_label.setText(get_device_recommendation(lang))
         
         m_tab = self.video_merge_tab
-        m_tab.timeline_title.setText("🎬 " + self.t('video_timeline'))
-        m_tab.source_label.setText("📂 " + self.t('video_sources'))
-        m_tab.btn_add.setText("➕ " + self.t('add'))
-        m_tab.btn_to_timeline.setText("⬇ " + self.t('add_to_timeline')) 
-        m_tab.btn_remove.setText("❌ " + self.t('remove'))
-        m_tab.btn_clear.setText("🧹 " + self.t('clear'))
-        m_tab.quality_label.setText(self.t('merge_quality'))
-        m_tab.btn_run.setText("🚀 " + self.t('export_video'))
+        m_tab.timeline_title.setText("🎬 " + UI_TEXTS[lang]['video_timeline'])
+        m_tab.source_label.setText("📂 " + UI_TEXTS[lang]['video_sources'])
+        m_tab.btn_add.setText(UI_TEXTS[lang]['add'])
+        m_tab.btn_to_timeline.setText(UI_TEXTS[lang]['add_to_timeline'])
+        m_tab.btn_remove.setText(UI_TEXTS[lang]['remove'])
+        m_tab.btn_clear.setText(UI_TEXTS[lang]['clear'])
+        m_tab.btn_run.setText(UI_TEXTS[lang]['export_video'])
         
-        for btn in [self.img_browse_btn, self.img_output_browse_btn, 
-                    self.vid_browse_btn, self.output_browse_btn]:
-            btn.setText(self.t('browse'))
+        self.img_run_btn.setText(UI_TEXTS[lang]['upscale_image'])
+        self.vid_run_btn.setText(UI_TEXTS[lang]['run_video_upscale'])
+        
+        self.img_browse_btn.setText(UI_TEXTS[lang]['browse'])
+        self.img_output_browse_btn.setText(UI_TEXTS[lang]['browse'])
+        self.vid_browse_btn.setText(UI_TEXTS[lang]['browse'])
+        self.output_browse_btn.setText(UI_TEXTS[lang]['browse'])
 
-    def browse_image_input(self):
-        from PyQt5.QtWidgets import QFileDialog
-        fname, _ = QFileDialog.getOpenFileName(self, self.t('input_image'), "", "Images (*.png *.jpg *.jpeg *.bmp *.webp)")
-        if fname:
-            self.img_input_edit.setText(fname)
+        for tab in [self.image_tab, self.video_tab]:
+            for label in tab.findChildren(QLabel):
+                current_text = label.text().replace(":", "").strip()
+                for key in UI_TEXTS['ko'].keys():
+                    ko_val = UI_TEXTS['ko'][key].replace(":", "").strip()
+                    en_val = UI_TEXTS['en'][key].replace(":", "").strip()
+                    
+                    if current_text == ko_val or current_text == en_val:
+                        label.setText(UI_TEXTS[lang][key])
+                        break
 
-    def browse_video_input(self):
-        from PyQt5.QtWidgets import QFileDialog
-        fname, _ = QFileDialog.getOpenFileName(self, self.t('input_video'), "", "Videos (*.mp4 *.avi *.mov *.mkv)")
-        if fname:
-            self.vid_input_edit.setText(fname)
-
-    def browse_output_folder(self):
-        from PyQt5.QtWidgets import QFileDialog
-        folder = QFileDialog.getExistingDirectory(self, self.t('output_folder'))
-        if folder:
-            sender = self.sender()
-            if sender == self.img_output_browse_btn:
-                self.img_output_edit.setText(folder)
-            else:
-                self.vid_output_edit.setText(folder)
-                
-    def browse_image_input(self):
-        from PyQt5.QtWidgets import QFileDialog
-        fname, _ = QFileDialog.getOpenFileName(self, self.t('input_image'), "", "Images (*.png *.jpg *.jpeg *.bmp *.webp)")
-        if fname: self.img_input_edit.setText(fname)
-
-    def browse_video_input(self):
-        from PyQt5.QtWidgets import QFileDialog
-        fname, _ = QFileDialog.getOpenFileName(self, self.t('input_video'), "", "Videos (*.mp4 *.avi *.mov *.mkv)")
-        if fname: self.vid_input_edit.setText(fname)
-
-    def browse_output_folder(self):
-        from PyQt5.QtWidgets import QFileDialog
-        folder = QFileDialog.getExistingDirectory(self, self.t('output_folder'))
-        if folder:
-            if self.sender() == self.img_output_browse_btn:
-                self.img_output_edit.setText(folder)
-            else:
-                self.vid_output_edit.setText(folder)
+        self.img_input_edit.setToolTip(UI_TEXTS[lang]['input_image_tip'])
+        self.img_output_edit.setToolTip(UI_TEXTS[lang]['output_folder_tip'])
+        self.img_scale_combo.setToolTip(UI_TEXTS[lang]['scale_tip'])
+        self.vid_input_edit.setToolTip(UI_TEXTS[lang]['input_video_tip'])
+        self.split_spin.setToolTip(UI_TEXTS[lang]['split_count_tip'])
+        self.target_parts_edit.setToolTip(UI_TEXTS[lang]['target_parts_tip'])
+        self.tile_spin.setToolTip(UI_TEXTS[lang]['tile_size_tip'])
+        
+        self.sys_info_label.setText(get_detailed_system_info())
 
     def run_image_upscale(self):
         input_path = self.img_input_edit.text()
         output_folder = self.img_output_edit.text()
         scale = int(self.img_scale_combo.currentText().replace('x', ''))
-        if not input_path or not os.path.exists(input_path):
-            self.img_log.append(self.t('error_input_missing').format(input_path))
+        
+        if not os.path.exists(input_path): 
+            QMessageBox.warning(self, "Error", "Input file not found.")
             return
-        if not output_folder:
-            self.img_log.append(self.t('error_no_output'))
-            return
-        self.img_log.append(self.t('start_image'))
+            
         self.img_run_btn.setEnabled(False)
-        self.img_progress.setValue(0)
-        from UpscaleImg import ImageUpscaleWorker
+        self.img_log.append(f"[{time.strftime('%H:%M:%S')}] {self.t('start_image')}")
+        
         self.img_worker = ImageUpscaleWorker(input_path, output_folder, scale)
         self.img_worker.progress.connect(self.img_progress.setValue)
         self.img_worker.finished.connect(self.on_image_finished)
         self.img_worker.start()
 
-    def on_image_finished(self, message):
-        self.img_log.append(message)
+    def on_image_finished(self, msg):
+        self.img_log.append(f"[{time.strftime('%H:%M:%S')}] {msg}")
         self.img_run_btn.setEnabled(True)
+        self.img_progress.setValue(0)
 
     def run_video_upscale(self):
         input_path = self.vid_input_edit.text()
         output_folder = self.vid_output_edit.text()
-        scale = int(self.vid_scale_combo.currentText().replace('x', ''))
         num_splits = self.split_spin.value()
-        tile = self.tile_spin.value()
         try:
-            parts_text = self.target_parts_edit.text()
-            target_parts = [int(x.strip()) for x in parts_text.split(',') if x.strip()]
-        except ValueError:
-            self.vid_log.append(self.t('error_target_parts'))
+            target_parts = [int(x.strip()) for x in self.target_parts_edit.text().split(',')]
+        except:
+            QMessageBox.warning(self, "Error", "Invalid target parts.")
             return
-        if not input_path or not os.path.exists(input_path):
-            self.vid_log.append(self.t('error_input_missing').format(input_path))
+        tile = self.tile_spin.value()
+        scale = int(self.vid_scale_combo.currentText().replace('x', ''))
+        
+        if not os.path.exists(input_path):
+            QMessageBox.warning(self, "Error", "Input file not found.")
             return
-        self.vid_log.append(self.t('start_video'))
+
         self.vid_run_btn.setEnabled(False)
-        self.vid_progress.setValue(0)
-        from UpscaleVid import VideoUpscaleWorker
+        self.vid_log.append(f"[{time.strftime('%H:%M:%S')}] {self.t('start_video')}")
+        
         self.vid_worker = VideoUpscaleWorker(input_path, output_folder, num_splits, target_parts, tile, scale)
         self.vid_worker.progress.connect(self.vid_progress.setValue)
         self.vid_worker.log.connect(self.vid_log.append)
         self.vid_worker.finished.connect(self.on_video_finished)
         self.vid_worker.start()
 
-    def on_video_finished(self, message):
-        self.vid_log.append(message)
+    def on_video_finished(self, msg):
+        self.vid_log.append(f"[{time.strftime('%H:%M:%S')}] {msg}")
         self.vid_run_btn.setEnabled(True)
+        self.vid_progress.setValue(0)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setStyle('Fusion')
     window = UpscaleApp()
-    window.show()
     sys.exit(app.exec_())
