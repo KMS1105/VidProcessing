@@ -344,8 +344,8 @@ class UpscaleApp(QMainWindow):
         self.tabs.setTabText(1, UI_TEXTS[lang]['tab_video'])
         self.tabs.setTabText(2, UI_TEXTS[lang]['tab_video_merge'])
         
-        self.img_device_label.setText(get_device_info_text(lang))
-        self.vid_device_label.setText(get_device_info_text(lang))
+        #self.img_device_label.setText(get_device_info_text(lang))
+        #self.vid_device_label.setText(get_device_info_text(lang))
         self.img_recommend_label.setText(get_device_recommendation(lang))
         self.vid_recommend_label.setText(get_device_recommendation(lang))
         

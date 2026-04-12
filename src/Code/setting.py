@@ -81,7 +81,7 @@ UI_TEXTS = {
         'browse': '찾아보기',
         'upscale_image': '이미지 업스케일 시작',
         'run_video_upscale': '비디오 업스케일 시작',
-        'device_label': '장치: ',
+        #'device_label': '장치: ',
         'cpu_recommend': '[CPU 모드] {0} 사용 중. 속도가 매우 느릴 수 있습니다. 2x 권장 및 분할 개수를 최대한 높이세요.',
         'igpu_recommend': '[Intel QSV 가속] {0} 사용 중. 2x 권장, 타일 크기를 200~400으로 조절하세요.',
         'gpu_recommend_high': 'GPU: {0} - 권장: 2x/4x 사용, 고해상도 시 tile 400~600 권장.',

@@ -131,12 +131,55 @@ def run_split_upscale(input_path, num_splits, target_parts, scale=2, tile=800, o
         out.release()
     
     cap.release()
+    
     if part_files:
-        clips = [VideoFileClip(f) for f in part_files]
-        final_clip = concatenate_videoclips(clips)
+        clips = []
+        for f in part_files:
+            if os.path.exists(f) and os.path.getsize(f) > 0:
+                try:
+                    clip = VideoFileClip(f).without_audio()
+                    clips.append(clip)
+                except Exception as e:
+                    if log_callback: log_callback(f"⚠️ 클립 로드 실패 ({f}): {str(e)}")
+
+        if not clips:
+            if log_callback: log_callback("❌ 병합할 영상 클립이 없습니다.")
+            return final_output_dir
+
+        final_clip = concatenate_videoclips(clips, method="compose")
         merged_path = os.path.join(final_output_dir, f"{video_filename}_full_x{scale}.mp4")
-        final_clip.write_videofile(merged_path, codec="libx264", audio=True)
-        for clip in clips: clip.close()
+        
+        temp_audio = None
+        try:
+            with VideoFileClip(input_path) as original_video:
+                if original_video.audio is not None:
+                    temp_audio = original_video.audio
+                    if log_callback: log_callback("🎵 원본 오디오 추출 완료")
+                    
+                    final_clip = final_clip.set_audio(temp_audio)
+                    
+                    final_clip.write_videofile(
+                        merged_path, 
+                        codec="libx264", 
+                        audio_codec="aac",
+                        audio=True,
+                        temp_audiofile="temp-audio.m4a",
+                        remove_temp=True
+                    )
+                else:
+                    raise ValueError("No Audio")
+        except Exception:
+            if log_callback: log_callback("ℹ️ 오디오 없이 영상을 저장합니다.")
+            final_clip.write_videofile(
+                merged_path, 
+                codec="libx264", 
+                audio=False,
+                remove_temp=True
+            )
+        
+        for clip in clips: 
+            clip.close()
+        final_clip.close()
 
     if progress_callback: progress_callback(100)
     return final_output_dir
@@ -228,8 +271,8 @@ def create_video_tab(parent, translations):
     tile_layout.addWidget(parent.tile_spin)
     layout.addLayout(tile_layout)
 
-    parent.vid_device_label = QLabel(get_device_info_text(parent.language))
-    layout.addWidget(parent.vid_device_label)
+    #parent.vid_device_label = QLabel(get_device_info_text(parent.language))
+    #layout.addWidget(parent.vid_device_label)
 
     parent.vid_recommend_label = QLabel(get_device_recommendation(parent.language))
     layout.addWidget(parent.vid_recommend_label)
@@ -241,7 +284,7 @@ def create_video_tab(parent, translations):
     parent.vid_log.setReadOnly(True)
     layout.addWidget(parent.vid_log)
 
-    parent.vid_run_btn = QPushButton(parent.t('run_upscale'))
+    parent.vid_run_btn = QPushButton(parent.t('run_video_upscale'))
     parent.vid_run_btn.setFixedHeight(40)
     parent.vid_run_btn.clicked.connect(parent.run_video_upscale)
     layout.addWidget(parent.vid_run_btn)
