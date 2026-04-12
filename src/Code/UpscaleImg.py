@@ -157,9 +157,6 @@ def create_image_tab(parent, translations):
     scale_layout.addWidget(parent.img_scale_combo)
     layout.addLayout(scale_layout)
 
-    #parent.img_device_label = QLabel(get_device_info_text(parent.language))
-    #layout.addWidget(parent.img_device_label)
-
     parent.img_recommend_label = QLabel(get_device_recommendation(parent.language))
     layout.addWidget(parent.img_recommend_label)
 

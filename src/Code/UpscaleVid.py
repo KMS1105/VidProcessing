@@ -5,7 +5,11 @@ import torch
 import numpy as np
 import openvino as ov
 import urllib.request
+import subprocess
 from collections import deque
+from threading import Thread
+from queue import Queue
+import time
 from moviepy.editor import VideoFileClip, concatenate_videoclips
 from openvino.runtime import Core, AsyncInferQueue
 from PyQt5.QtWidgets import (
@@ -13,27 +17,11 @@ from PyQt5.QtWidgets import (
     QSpinBox, QComboBox, QTextEdit, QProgressBar, QVBoxLayout
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
-from setting import get_device_info_text, get_device_recommendation
-
-try:
-    import torchvision.transforms.functional as F
-    sys.modules['torchvision.transforms.functional_tensor'] = F
-except ImportError:
-    pass
 
 def run_split_upscale(input_path, num_splits, target_parts, scale=2, tile=800, output_folder='./Vid', progress_callback=None, log_callback=None):
     core = ov.Core()
     available_devices = core.available_devices
-    
-    if torch.cuda.is_available():
-        device_name = "CUDA"
-    elif any("GPU" in d for d in available_devices):
-        device_name = "GPU"
-    else:
-        device_name = "CPU"
-
-    if log_callback:
-        log_callback(f"🚀 가속 장치: {device_name}")
+    device_name = "CUDA" if torch.cuda.is_available() else ("GPU" if any("GPU" in d for d in available_devices) else "CPU")
 
     from realesrgan import RealESRGANer
     from basicsr.archs.rrdbnet_arch import RRDBNet
@@ -53,45 +41,44 @@ def run_split_upscale(input_path, num_splits, target_parts, scale=2, tile=800, o
     xml_path = os.path.join(weights_dir, f"{model_base}.xml")
 
     if not os.path.exists(pth_path):
-        if log_callback: log_callback(f"⏳ 모델 다운로드 중...")
+        if log_callback: log_callback(f"📥 모델 다운로드 중: {model_base}")
         urllib.request.urlretrieve(model_urls[scale], pth_path)
 
     cap = cv2.VideoCapture(input_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     new_h, new_w = (height // 4) * 4, (width // 4) * 4
+    out_w, out_h = new_w * scale, new_h * scale
 
     if device_name == "GPU":
         gpu_id = "GPU.1" if "GPU.1" in available_devices else "GPU.0"
         if not os.path.exists(xml_path):
+            if log_callback: log_callback("⚙️ OpenVINO IR 모델 변환 중...")
             model_temp = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=scale)
             loadnet = torch.load(pth_path, map_location='cpu')
             model_temp.load_state_dict(loadnet['params_ema'] if 'params_ema' in loadnet else loadnet, strict=True)
             model_temp.eval()
-            dummy = torch.randn(1, 3, 256, 256)
-            ov_model = ov.convert_model(model_temp, example_input=dummy)
-            ov.save_model(ov_model, xml_path)
+            ov.save_model(ov.convert_model(model_temp, example_input=torch.randn(1, 3, 256, 256)), xml_path)
         
         ov_model_loaded = core.read_model(xml_path)
         ov_model_loaded.reshape([1, 3, new_h, new_w])
         compiled_model = core.compile_model(ov_model_loaded, gpu_id)
-        infer_queue = AsyncInferQueue(compiled_model, 2)
-        
-        user_data_queue = deque()
+        infer_queue = AsyncInferQueue(compiled_model, 8)
+        write_queue = Queue(maxsize=128)
 
         def completion_callback(infer_request, _):
-            out_writer = user_data_queue.popleft()
             res = infer_request.get_output_tensor(0).data
             output = np.squeeze(res).clip(0, 1).transpose(1, 2, 0)
             output = cv2.cvtColor((output * 255.0).astype(np.uint8), cv2.COLOR_RGB2BGR)
-            out_writer.write(output)
+            write_queue.put(output.tobytes())
 
         infer_queue.set_callback(completion_callback)
     else:
+        if log_callback: log_callback(f"🖥️ {device_name} 모드로 실행")
         model_arch = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=scale)
         upsampler = RealESRGANer(scale=scale, model_path=pth_path, model=model_arch, tile=tile, half=(device_name=="CUDA"), device='cuda' if device_name=="CUDA" else 'cpu')
+        write_queue = Queue(maxsize=128)
 
     frames_per_part = total_frames // num_splits
     parts_ranges = [(i * frames_per_part, (i + 1) * frames_per_part if i != num_splits - 1 else total_frames) for i in range(num_splits)]
@@ -104,82 +91,89 @@ def run_split_upscale(input_path, num_splits, target_parts, scale=2, tile=800, o
     os.makedirs(final_output_dir, exist_ok=True)
     part_files = []
 
+    if log_callback: log_callback(f"🎬 총 {len(selected_parts)}개 파트 처리 시작")
+
     for part_idx in selected_parts:
         start_f, end_f = parts_ranges[part_idx]
         output_path = os.path.join(final_output_dir, f"part_{part_idx}_x{scale}.mp4")
         part_files.append(output_path)
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
-        out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (new_w * scale, new_h * scale))
 
-        for _ in range(start_f, end_f):
-            ret, frame = cap.read()
-            if not ret: break
+        ffmpeg_cmd = [
+            'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
+            '-s', f'{out_w}x{out_h}', '-pix_fmt', 'bgr24', '-r', str(fps),
+            '-i', '-', '-c:v', 'h264_qsv', '-preset', 'veryfast',
+            '-global_quality', '25', '-pix_fmt', 'nv12', output_path
+        ]
+        process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+        def writer_thread_func(proc, q):
+            while True:
+                data = q.get()
+                if data is None: break
+                proc.stdin.write(data)
+            proc.stdin.close()
+
+        w_thread = Thread(target=writer_thread_func, args=(process, write_queue), daemon=True)
+        w_thread.start()
+
+        input_queue = Queue(maxsize=32)
+
+        def preprocessor_thread():
+            for _ in range(start_f, end_f):
+                ret, frame = cap.read()
+                if not ret: break
+                if device_name == "GPU":
+                    img = cv2.resize(frame, (new_w, new_h))
+                    inp = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+                    inp = inp.transpose(2, 0, 1)[np.newaxis, ...]
+                    input_queue.put(inp)
+                else:
+                    input_queue.put(frame)
+            input_queue.put(None)
+
+        p_thread = Thread(target=preprocessor_thread, daemon=True)
+        p_thread.start()
+
+        while True:
+            data = input_queue.get()
+            if data is None: break
+            
             if device_name == "GPU":
-                img = cv2.resize(frame, (new_w, new_h))
-                input_data = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-                input_data = input_data.transpose(2, 0, 1)[np.newaxis, ...]
-                user_data_queue.append(out)
-                infer_queue.start_async({0: input_data})
+                infer_queue.start_async({0: data})
             else:
-                output, _ = upsampler.enhance(frame, outscale=scale)
-                out.write(output)
+                output, _ = upsampler.enhance(data, outscale=scale)
+                write_queue.put(output.tobytes())
             
             processed_count += 1
-            if progress_callback: progress_callback(int(processed_count * 90 / total_selected_frames))
+            if progress_callback:
+                progress_callback(int(processed_count * 90 / total_selected_frames))
+            
+            if log_callback and processed_count % 100 == 0:
+                log_callback(f"⏳ 진행 중: {processed_count}/{total_selected_frames} (전처리 큐: {input_queue.qsize()}, 출력 큐: {write_queue.qsize()})")
         
+        p_thread.join()
         if device_name == "GPU": infer_queue.wait_all()
-        out.release()
+        write_queue.put(None)
+        w_thread.join()
+        process.wait()
     
     cap.release()
     
     if part_files:
-        clips = []
-        for f in part_files:
-            if os.path.exists(f) and os.path.getsize(f) > 0:
-                try:
-                    clip = VideoFileClip(f).without_audio()
-                    clips.append(clip)
-                except Exception as e:
-                    if log_callback: log_callback(f"⚠️ 클립 로드 실패 ({f}): {str(e)}")
-
-        if not clips:
-            if log_callback: log_callback("❌ 병합할 영상 클립이 없습니다.")
-            return final_output_dir
-
-        final_clip = concatenate_videoclips(clips, method="compose")
+        if log_callback: log_callback("🔗 영상 및 오디오 병합 중 (GPU 가속 활용)...")
+        list_path = os.path.join(final_output_dir, "parts.txt")
+        with open(list_path, 'w') as f:
+            for p in part_files:
+                f.write(f"file '{os.path.abspath(p)}'\n")
+        
         merged_path = os.path.join(final_output_dir, f"{video_filename}_full_x{scale}.mp4")
-        
-        temp_audio = None
-        try:
-            with VideoFileClip(input_path) as original_video:
-                if original_video.audio is not None:
-                    temp_audio = original_video.audio
-                    if log_callback: log_callback("🎵 원본 오디오 추출 완료")
-                    
-                    final_clip = final_clip.set_audio(temp_audio)
-                    
-                    final_clip.write_videofile(
-                        merged_path, 
-                        codec="libx264", 
-                        audio_codec="aac",
-                        audio=True,
-                        temp_audiofile="temp-audio.m4a",
-                        remove_temp=True
-                    )
-                else:
-                    raise ValueError("No Audio")
-        except Exception:
-            if log_callback: log_callback("ℹ️ 오디오 없이 영상을 저장합니다.")
-            final_clip.write_videofile(
-                merged_path, 
-                codec="libx264", 
-                audio=False,
-                remove_temp=True
-            )
-        
-        for clip in clips: 
-            clip.close()
-        final_clip.close()
+        merge_cmd = [
+            'ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path,
+            '-i', input_path, '-map', '0:v', '-map', '1:a?', '-c:v', 'copy', '-c:a', 'aac', merged_path
+        ]
+        subprocess.run(merge_cmd, stderr=subprocess.DEVNULL)
+        os.remove(list_path)
 
     if progress_callback: progress_callback(100)
     return final_output_dir
@@ -191,13 +185,15 @@ class VideoUpscaleWorker(QThread):
 
     def __init__(self, input_path, output_folder, num_splits, target_parts, tile, scale):
         super().__init__()
-        self.input_path, self.output_folder = input_path, output_folder
-        self.num_splits, self.target_parts = num_splits, target_parts
-        self.tile, self.scale = tile, scale
+        self.input_path = input_path
+        self.output_folder = output_folder
+        self.num_splits = num_splits
+        self.target_parts = target_parts
+        self.tile = tile
+        self.scale = scale
 
     def run(self):
         try:
-            self.progress.emit(1)
             result_dir = run_split_upscale(
                 self.input_path, self.num_splits, self.target_parts, 
                 self.scale, self.tile, self.output_folder, 
@@ -205,7 +201,7 @@ class VideoUpscaleWorker(QThread):
             )
             self.finished.emit(f"✨ 완료: {os.path.abspath(result_dir)}")
         except Exception as e:
-            self.finished.emit(f"❌ 오류: {str(e)}")
+            self.finished.emit(f"❌ 오류 발생: {str(e)}")
 
 def create_label_with_info(parent, text_key, tip_key):
     layout = QHBoxLayout()
@@ -271,9 +267,7 @@ def create_video_tab(parent, translations):
     tile_layout.addWidget(parent.tile_spin)
     layout.addLayout(tile_layout)
 
-    #parent.vid_device_label = QLabel(get_device_info_text(parent.language))
-    #layout.addWidget(parent.vid_device_label)
-
+    from setting import get_device_recommendation
     parent.vid_recommend_label = QLabel(get_device_recommendation(parent.language))
     layout.addWidget(parent.vid_recommend_label)
 
