@@ -16,6 +16,7 @@ PyQt5 기반 GUI와 **NVIDIA CUDA / Intel OpenVINO / CPU 자동 전환 시스템
       ├── setting.py
       ├── UpscaleImg.py
       └── UpscaleVid.py
+requirements.txt
 ```
 
 ---
@@ -80,6 +81,7 @@ It uses a PyQt5 GUI and supports **NVIDIA CUDA, Intel OpenVINO, and CPU auto-swi
       ├── setting.py
       ├── UpscaleImg.py
       └── UpscaleVid.py
+requirements.txt
 ```
 
 ---
