@@ -43,7 +43,7 @@ python Launch.py
 - 2x / 4x / 8x 지원
 - GPU / CPU 자동 선택
 
-#### 🎬 비디오 인코딩
+#### 🎬 비디오 업스케일
 - 분할 처리
 - 멀티스레딩 처리
 - FFmpeg 자동 인코딩
@@ -107,7 +107,7 @@ python Launch.py
 - Supports 2x / 4x / 8x
 - Auto GPU / CPU selection
 
-#### 🎬 Video Encoding
+#### 🎬 Video Upscaling
 - Split processing
 - Multi-threaded pipeline
 - FFmpeg encoding
