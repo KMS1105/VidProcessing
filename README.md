@@ -100,8 +100,18 @@ requirements.txt
 
 ### 🛠 Installation
 
+#### Powershell
+
 ```bash
+$env:PYTHONUTF8 = 1
 pip install -r requirements.txt
+```
+
+#### CMD
+
+```bash
+set PYTHONUTF8=1
+pip install -r requirements.txtt
 ```
 
 ---
