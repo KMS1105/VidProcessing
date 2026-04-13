@@ -25,6 +25,7 @@ requirements.txt
 ### 🛠 설치
 
 ```bash
+$env:PYTHONUTF8 = 1
 pip install -r requirements.txt
 ```
 
