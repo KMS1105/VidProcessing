@@ -8,13 +8,14 @@ PyQt5 기반 GUI와 **NVIDIA CUDA / Intel OpenVINO / CPU 자동 전환 시스템
 ### 📂 프로젝트 구성
 
 ```
-📁 project/
- ├── Launch.py
- ├── setting.py
- ├── UpscaleImg.py
- ├── UpscaleVid.py
- ├── weights/
- └── ffmpeg/
+📁 src/
+ ├── weights/ (자동 다운로드)
+ ├── ffmpeg/ (자동 다운로드)
+ └── 📁 Code/
+      ├── Launch.py
+      ├── setting.py
+      ├── UpscaleImg.py
+      └── UpscaleVid.py
 ```
 
 ---
@@ -71,13 +72,14 @@ It uses a PyQt5 GUI and supports **NVIDIA CUDA, Intel OpenVINO, and CPU auto-swi
 ### 📂 Project Structure
 
 ```
-📁 project/
- ├── Launch.py
- ├── setting.py
- ├── UpscaleImg.py
- ├── UpscaleVid.py
- ├── weights/
- └── ffmpeg/
+📁 src/
+ ├── weights/ (auto download)
+ ├── ffmpeg/ (auto download)
+ └── 📁 Code/
+      ├── Launch.py
+      ├── setting.py
+      ├── UpscaleImg.py
+      └── UpscaleVid.py
 ```
 
 ---
