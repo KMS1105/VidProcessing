@@ -1,4 +1,4 @@
-# 🚀 AI Upscaler Project
+# 🚀 AI Upscaler Project Beta
 
 이 프로젝트는 **Real-ESRGAN** 기반으로 이미지 및 비디오의 해상도를 향상시키는 데스크톱 애플리케이션입니다.  
 PyQt5 기반 GUI와 **NVIDIA CUDA / Intel OpenVINO / CPU 자동 전환 시스템**을 통해 다양한 환경에서 최적의 성능을 제공합니다.
@@ -43,7 +43,7 @@ python Launch.py
 - 2x / 4x / 8x 지원
 - GPU / CPU 자동 선택
 
-#### 🎬 비디오 업스케일
+#### 🎬 비디오 인코딩
 - 분할 처리
 - 멀티스레딩 처리
 - FFmpeg 자동 인코딩
@@ -60,7 +60,7 @@ python Launch.py
 - RTX: 4x 권장
 - GTX: 2x 권장
 - Intel GPU: 2x 권장
-- CPU: 느림 (분할 증가)
+- CPU: 느림 (분할 개수 증가)
 
 ---
 
@@ -107,7 +107,7 @@ python Launch.py
 - Supports 2x / 4x / 8x
 - Auto GPU / CPU selection
 
-#### 🎬 Video Upscaling
+#### 🎬 Video Encoding
 - Split processing
 - Multi-threaded pipeline
 - FFmpeg encoding
