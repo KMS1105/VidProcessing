@@ -7,7 +7,6 @@ openvino==2024.6.0
 # Image/Video processing
 numpy==1.26.4
 opencv-python==4.8.1.78
-moviepy==1.0.3
 
 # GUI and Utilities
 PyQt5==5.15.9
