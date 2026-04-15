@@ -127,6 +127,12 @@ python Launch.py
 
 ---
 
+## 📌 Notes
+
+* 최초 실행 시 모델 다운로드 및 변환으로 인해 시간이 소요될 수 있습니다.
+* CUDA 환경에서는 PyTorch 재설치가 자동으로 제안될 수 있습니다.
+* FFmpeg는 자동으로 다운로드 및 설정됩니다.
+
 ## 🌐 English
 
 ### 🚀 Overview
@@ -193,6 +199,6 @@ https://github.com/xinntao/Real-ESRGAN
 
 ## 📌 Notes
 
-* 최초 실행 시 모델 다운로드 및 변환으로 인해 시간이 소요될 수 있습니다.
-* CUDA 환경에서는 PyTorch 재설치가 자동으로 제안될 수 있습니다.
-* FFmpeg는 자동으로 다운로드 및 설정됩니다.
+* On first run, model download and conversion may take some time.
+* In CUDA environments, PyTorch reinstallation may be suggested automatically.
+* FFmpeg will be downloaded and configured automatically.
