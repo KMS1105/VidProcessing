@@ -146,6 +146,23 @@ It also includes **automatic model download, OpenVINO conversion, and FFmpeg set
 
 ---
 
+## 📂 Project Structure
+
+---
+
+📁 src/
+ ├── weights/           # Auto-downloaded models and OpenVINO converted files
+ ├── ffmpeg/            # FFmpeg auto-download
+ └── 📁 Code/
+      ├── Launch.py     # Main execution and UI
+      ├── setting.py    # System detection / recommendations / theme
+      ├── VideoMerge.py # Video merging feature
+      ├── UpscaleImg.py # Image upscaling
+      └── UpscaleVid.py # Video upscaling
+requirements.txt
+
+---
+
 ### 🖥 Features
 
 #### 🖼 Image Upscaling
