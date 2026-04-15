@@ -148,7 +148,7 @@ It also includes **automatic model download, OpenVINO conversion, and FFmpeg set
 
 ## 📂 Project Structure
 
----
+```
 
 📁 src/
  ├── weights/           # Auto-downloaded models and OpenVINO converted files
@@ -161,7 +161,7 @@ It also includes **automatic model download, OpenVINO conversion, and FFmpeg set
       └── UpscaleVid.py # Video upscaling
 requirements.txt
 
----
+```
 
 ### 🖥 Features
 
