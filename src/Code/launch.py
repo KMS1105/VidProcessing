@@ -263,7 +263,6 @@ class UpscaleApp(QMainWindow):
 
         self.img_input_edit.setToolTip(UI_TEXTS[lang]['input_image_tip'])
         self.img_output_edit.setToolTip(UI_TEXTS[lang]['output_folder_tip'])
-        self.img_scale_combo.setToolTip(UI_TEXTS[lang]['scale_tip'])
         self.vid_input_edit.setToolTip(UI_TEXTS[lang]['input_video_tip'])
         self.split_spin.setToolTip(UI_TEXTS[lang]['split_count_tip'])
         self.target_parts_edit.setToolTip(UI_TEXTS[lang]['target_parts_tip'])
@@ -272,24 +271,29 @@ class UpscaleApp(QMainWindow):
         self.sys_info_label.setText(get_detailed_system_info())
 
     def run_image_upscale(self):
-        from UpscaleImg import create_image_tab, ImageUpscaleWorker
+        from UpscaleImg import ImageUpscaleWorker
+        
         input_path = self.img_input_edit.text()
         output_folder = self.img_output_edit.text()
-        scale = int(self.img_scale_combo.currentText().replace('x', ''))
+        model_full_path = self.img_model_combo.currentData()
         
-        if not os.path.exists(input_path): 
-            QMessageBox.warning(self, "Error", "Input file not found.")
+        if not input_path or not os.path.exists(input_path):
+            QMessageBox.warning(self, "Error", "입력 파일을 선택해주세요.")
+            return
+            
+        if not model_full_path or not os.path.exists(model_full_path):
+            QMessageBox.warning(self, "Error", "모델 파일을 선택해주세요.")
             return
             
         self.img_run_btn.setEnabled(False)
         self.img_log.append(f"[{time.strftime('%H:%M:%S')}] {self.t('start_image')}")
         
-        self.img_worker = ImageUpscaleWorker(input_path, output_folder, scale)
+        self.img_worker = ImageUpscaleWorker(input_path, output_folder, model_full_path)
         self.img_worker.progress.connect(self.img_progress.setValue)
         self.img_worker.log.connect(self.img_log.append)
         self.img_worker.finished.connect(self.on_image_finished)
         self.img_worker.start()
-
+        
     def on_image_finished(self, msg):
         self.img_log.append(f"[{time.strftime('%H:%M:%S')}] {msg}")
         self.img_run_btn.setEnabled(True)
