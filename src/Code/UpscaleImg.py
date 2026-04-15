@@ -11,7 +11,8 @@ from PyQt5.QtWidgets import (
     QComboBox, QProgressBar, QTextEdit, QVBoxLayout, QApplication
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
-from setting import get_device_info_text, get_device_recommendation
+from setting import get_device_info_text, get_device_recommendation, prepare_model
+
 
 try:
     import torchvision.transforms.functional as F
@@ -28,40 +29,8 @@ class ModelSetupWorker(QThread):
         self.weights_dir = weights_dir
 
     def run(self):
-        required_models = {
-            "RealESRGAN_x2plus.pth": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth",
-            "RealESRGAN_x4plus.pth": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
-        }
-
-        use_cuda = torch.cuda.is_available()
-        from basicsr.archs.rrdbnet_arch import RRDBNet
-
-        for name, url in required_models.items():
-            pth_path = os.path.join(self.weights_dir, name)
-            xml_path = pth_path.replace('.pth', '.xml')
-            
-            if not os.path.exists(pth_path):
-                self.log.emit(f"⏳ 모델 다운로드 중: {name}")
-                try: 
-                    urllib.request.urlretrieve(url, pth_path)
-                    self.log.emit(f"✅ 다운로드 완료: {name}")
-                except Exception as e: 
-                    self.log.emit(f"❌ 다운로드 실패: {str(e)}")
-            
-            if not use_cuda and os.path.exists(pth_path) and not os.path.exists(xml_path):
-                self.log.emit(f"🔄 Intel GPU 최적화 변환 중: {name}")
-                try:
-                    scale = 2 if 'x2' in name.lower() else 8 if 'x8' in name.lower() else 4
-                    model_temp = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=scale)
-                    loadnet = torch.load(pth_path, map_location='cpu')
-                    model_temp.load_state_dict(loadnet['params_ema'] if 'params_ema' in loadnet else loadnet, strict=True)
-                    model_temp.eval()
-                    ov_model = ov.convert_model(model_temp, example_input=torch.randn(1, 3, 256, 256))
-                    ov.save_model(ov_model, xml_path)
-                    self.log.emit(f"✅ 변환 완료: {os.path.basename(xml_path)}")
-                except Exception as e: 
-                    self.log.emit(f"❌ 변환 실패: {str(e)}")
-        
+        for scale in [2, 4]:
+            prepare_model(scale, self.weights_dir, self.log.emit)
         self.finished.emit()
 
 class ImageUpscaleWorker(QThread):
@@ -76,7 +45,7 @@ class ImageUpscaleWorker(QThread):
         self.model_path = model_path
 
     def run(self):
-        try:
+        try: 
             self.progress.emit(10)
             core = ov.Core()
             available_devices = core.available_devices

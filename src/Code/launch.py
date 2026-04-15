@@ -24,7 +24,8 @@ from PyQt5.QtGui import QIcon, QFont, QPixmap, QColor
 from setting import (
     UI_TEXTS, apply_app_theme, get_device_info_text, 
     get_device_recommendation, get_detailed_system_info,
-    get_torch_install_command, get_hardware_gpu_name
+    get_torch_install_command, get_hardware_gpu_name,
+    prepare_model
 )
 
 from VideoMerge import VideoMergeTab
@@ -106,6 +107,13 @@ class UpscaleApp(QMainWindow):
         self.translations = []
         self.verify_torch_environment()
         self.initUI()
+    
+    def start_model_setup(self):
+        from UpscaleImg import ModelSetupWorker
+        self.model_worker = ModelSetupWorker(self.weights_dir)
+        if hasattr(self, 'img_log'):
+            self.model_worker.log.connect(self.img_log.append)
+        self.model_worker.start()
 
     def verify_torch_environment(self):
         need_fix = False

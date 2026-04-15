@@ -2,6 +2,46 @@ import platform
 import subprocess
 import psutil
 import sys
+import urllib.request
+import os
+
+MODEL_INFO = {
+    2: {'name': 'RealESRGAN_x2plus', 'url': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth'},
+    4: {'name': 'RealESRGAN_x4plus', 'url': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth'},
+}
+
+def prepare_model(scale, weights_dir, log_func=None):
+    if scale not in MODEL_INFO: return None, None
+    
+    import torch
+    
+    model_data = MODEL_INFO[scale]
+    pth_name = f"{model_data['name']}.pth"
+    pth_path = os.path.join(weights_dir, pth_name)
+    xml_path = pth_path.replace('.pth', '.xml')
+
+    if not os.path.exists(pth_path):
+        if log_func: log_func(f"⏳ {pth_name} 다운로드 중...")
+        os.makedirs(weights_dir, exist_ok=True)
+        urllib.request.urlretrieve(model_data['url'], pth_path)
+        if log_func: log_func(f"✅ 다운로드 완료")
+
+    if not torch.cuda.is_available() and not os.path.exists(xml_path):
+        if log_func: log_func(f"🔄 Intel GPU 가속 모델 변환 중...")
+        try:
+            import openvino as ov
+            from basicsr.archs.rrdbnet_arch import RRDBNet
+            model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=scale)
+            loadnet = torch.load(pth_path, map_location='cpu')
+            model.load_state_dict(loadnet['params_ema'] if 'params_ema' in loadnet else loadnet, strict=True)
+            model.eval()
+            ov_model = ov.convert_model(model, example_input=torch.randn(1, 3, 256, 256))
+            ov.save_model(ov_model, xml_path)
+            if log_func: log_func(f"✅ 변환 완료: {os.path.basename(xml_path)}")
+        except Exception as e:
+            if log_func: log_func(f"❌ 변환 실패: {e}")
+            return pth_path, None
+    return pth_path, (xml_path if os.path.exists(xml_path) else None)
 
 def get_hardware_gpu_name():
     try:
