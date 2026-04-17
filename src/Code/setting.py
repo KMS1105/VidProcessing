@@ -137,7 +137,7 @@ def format_time(seconds):
 
 UI_TEXTS = {
     'ko': {
-        'tab_video_merge': '영상 편집 (합치기)',
+        'tab_video_merge': '영상 병합',
         'merge_video_list': '합칠 영상 목록 (드래그하여 순서 변경):',
         'add_video': '영상 추가',
         'remove_selected': '선택 삭제',
