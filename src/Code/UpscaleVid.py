@@ -206,8 +206,8 @@ class VideoUpscaleWorker(QThread):
     def run(self):
         try:
             res = run_split_upscale(self.input_path, self.num_splits, self.target_parts, self.model_path, self.tile, self.output_folder, self.progress.emit, self.log.emit)
-            self.finished.emit(f"✨작업 완료: {os.path.abspath(res)}")
-        except Exception as e: self.finished.emit(f"❌작업 실패: {str(e)}")
+            self.finished.emit(f"✨ 작업 완료: {os.path.abspath(res)}")
+        except Exception as e: self.finished.emit(f"❌ 작업 실패: {str(e)}")
 
 def create_label_with_info(parent, text_key, tip_key):
     layout = QHBoxLayout()

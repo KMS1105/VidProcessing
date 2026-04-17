@@ -228,12 +228,6 @@ class UpscaleApp(QMainWindow):
         self.vid_recommend_label.setText(get_device_recommendation(lang))
         
         m_tab = self.video_merge_tab
-        m_tab.timeline_title.setText("🎬 " + UI_TEXTS[lang]['video_timeline'])
-        m_tab.source_label.setText("📂 " + UI_TEXTS[lang]['video_sources'])
-        m_tab.btn_add.setText(UI_TEXTS[lang]['add'])
-        m_tab.btn_to_timeline.setText(UI_TEXTS[lang]['add_to_timeline'])
-        m_tab.btn_remove.setText(UI_TEXTS[lang]['remove'])
-        m_tab.btn_clear.setText(UI_TEXTS[lang]['clear'])
         m_tab.btn_run.setText(UI_TEXTS[lang]['export_video'])
         
         self.img_run_btn.setText(UI_TEXTS[lang]['upscale_image'])

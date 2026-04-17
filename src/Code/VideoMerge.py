@@ -2,12 +2,12 @@ import os
 import subprocess
 import platform
 import shutil
+import re
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, 
-    QListWidgetItem, QPushButton, QFrame, QFileDialog, 
-    QMessageBox, QAbstractItemView, QListView, QApplication, QTextEdit
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
+    QFileDialog, QMessageBox, QApplication, QTextEdit, QLineEdit, QProgressBar
 )
-from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
 def find_ffmpeg_bin(search_root):
     for root, dirs, files in os.walk(search_root):
@@ -17,180 +17,176 @@ def find_ffmpeg_bin(search_root):
                 return full_path
     return None
 
-def merge_videos(video_paths, output_path, log_callback=None):
-    if not video_paths: return
-    
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    base_dir = os.path.dirname(current_dir)
-    ffmpeg_search_root = os.path.join(base_dir, "ffmpeg")
-    
-    ffmpeg_exe = find_ffmpeg_bin(ffmpeg_search_root)
-    
-    if not ffmpeg_exe or not os.path.exists(ffmpeg_exe):
-        ffmpeg_exe = shutil.which("ffmpeg")
-        if not ffmpeg_exe:
-            raise Exception("FFmpeg 실행 파일을 찾을 수 없습니다.")
+class MergeWorker(QThread):
+    finished = pyqtSignal(bool, str)
+    log = pyqtSignal(str)
+    progress = pyqtSignal(int)
 
-    list_path = os.path.join(current_dir, "merge_list.txt")
-    
-    try:
-        if log_callback: log_callback(f"📝 {len(video_paths)}개 파일 병합 준비 중...")
-        
-        with open(list_path, 'w', encoding='utf-8') as f:
-            for path in video_paths:
-                abs_p = os.path.abspath(path)
-                safe_p = abs_p.replace(os.sep, '/')
-                f.write(f"file '{safe_p}'\n")
+    def __init__(self, video_paths, output_path, audio_path=None):
+        super().__init__()
+        self.video_paths = video_paths
+        self.output_path = output_path
+        self.audio_path = audio_path
+        self.total_duration = 0
 
-        if log_callback: log_callback("🚀 오디오 호환성 모드로 병합 시작...")
-        
-        cmd = [
-            ffmpeg_exe, '-y', '-f', 'concat', '-safe', '0', '-i', list_path,
-            '-c:v', 'copy',      
-            '-c:a', 'aac',       
-            '-b:a', '192k',     
-            '-movflags', '+faststart', 
-            output_path
-        ]
-        
-        result = subprocess.run(
-            cmd, 
-            capture_output=True, 
-            text=True, 
-            shell=(platform.system() == 'Windows'),
-            cwd=current_dir,
-            encoding='utf-8',
-            errors='ignore'
-        )
-        
-        if result.returncode != 0:
-            raise Exception(result.stderr)
-        if log_callback: log_callback(f"✅ 완료: {os.path.basename(output_path)}")
+    def get_duration(self, ffmpeg_exe, file_path):
+        try:
+            cmd = [ffmpeg_exe, '-i', file_path]
+            result = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding='utf-8', creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == 'Windows' else 0)
+            match = re.search(r"Duration:\s(\d+):(\d+):(\d+\.\d+)", result.stderr)
+            if match:
+                h, m, s = map(float, match.groups())
+                return h * 3600 + m * 60 + s
+        except: pass
+        return 0
+
+    def run(self):
+        try:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            base_dir = os.path.dirname(current_dir)
+            ffmpeg_search_root = os.path.join(base_dir, "ffmpeg")
+            ffmpeg_exe = find_ffmpeg_bin(ffmpeg_search_root) or shutil.which("ffmpeg") or 'ffmpeg'
+
+            self.total_duration = sum(self.get_duration(ffmpeg_exe, p) for p in self.video_paths)
+
+            list_path = os.path.join(os.path.dirname(self.output_path), "merge_list.txt")
+            with open(list_path, 'w', encoding='utf-8') as f:
+                for path in self.video_paths:
+                    abs_path = os.path.abspath(path).replace('\\', '/')
+                    f.write(f"file '{abs_path}'\n")
+
+            cmd = [ffmpeg_exe, '-y', '-f', 'concat', '-safe', '0', '-i', list_path]
+            if self.audio_path:
+                cmd.extend(['-i', self.audio_path, '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac', '-shortest'])
+            else:
+                cmd.extend(['-c', 'copy'])
+            cmd.append(self.output_path)
             
-    finally:
-        if os.path.exists(list_path):
-            try: os.remove(list_path)
-            except: pass
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+                                     universal_newlines=True, encoding='utf-8', 
+                                     creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == 'Windows' else 0)
+            
+            filter_keywords = ['frame=', 'size=', 'time=', 'bitrate=', 'speed=', 'Qavg', '[aac', 'Press [q]']
+
+            for line in process.stdout:
+                clean_line = line.strip()
+                if not clean_line: continue
+                
+                time_match = re.search(r"time=(\d+):(\d+):(\d+\.\d+)", clean_line)
+                if time_match and self.total_duration > 0:
+                    h, m, s = map(float, time_match.groups())
+                    current_time = h * 3600 + m * 60 + s
+                    p = int((current_time / self.total_duration) * 100)
+                    self.progress.emit(min(p, 100))
+
+                if any(kw in clean_line for kw in filter_keywords): continue
+                self.log.emit(clean_line)
+            
+            process.wait()
+            if os.path.exists(list_path): os.remove(list_path)
+            self.progress.emit(100 if process.returncode == 0 else 0)
+            self.finished.emit(process.returncode == 0, self.output_path if process.returncode == 0 else "Merge failed")
+        except Exception as e:
+            self.finished.emit(False, str(e))
 
 class VideoMergeTab(QWidget):
-    def __init__(self, main_app):
-        super().__init__()
-        self.main_app = main_app
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.input_video_paths = []
+        self.selected_audio_path = None
         self.initUI()
 
     def initUI(self):
-        self.main_layout = QVBoxLayout()
-        self.main_layout.setContentsMargins(25, 25, 25, 25)
-        self.main_layout.setSpacing(15)
+        layout = QVBoxLayout(self)
 
-        self.timeline_title = QLabel()
-        self.main_layout.addWidget(self.timeline_title)
-        
-        self.timeline_list = QListWidget()
-        self.timeline_list.setFlow(QListWidget.LeftToRight)
-        self.timeline_list.setViewMode(QListWidget.IconMode)
-        self.timeline_list.setDragDropMode(QAbstractItemView.InternalMove)
-        self.timeline_list.setDefaultDropAction(Qt.MoveAction)
-        self.timeline_list.setMovement(QListView.Snap)
-        self.timeline_list.setResizeMode(QListWidget.Adjust)
-        self.timeline_list.setMinimumHeight(180)
-        self.timeline_list.setIconSize(QSize(120, 70))
-        self.timeline_list.setSpacing(15)
-        self.main_layout.addWidget(self.timeline_list)
+        input_layout = QHBoxLayout()
+        self.input_label = QLabel("입력 폴더:")
+        self.input_path_edit = QLineEdit()
+        self.btn_browse_folder = QPushButton("폴더 선택")
+        self.btn_browse_folder.clicked.connect(self.select_input_folder)
+        input_layout.addWidget(self.input_label)
+        input_layout.addWidget(self.input_path_edit)
+        input_layout.addWidget(self.btn_browse_folder)
+        layout.addLayout(input_layout)
 
-        self.mid_container = QHBoxLayout()
-        self.source_container = QVBoxLayout()
-        self.source_label = QLabel()
-        self.source_list = QListWidget()
-        self.source_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.source_container.addWidget(self.source_label)
-        self.source_container.addWidget(self.source_list)
-        self.mid_container.addLayout(self.source_container, 8)
+        audio_layout = QHBoxLayout()
+        self.audio_label = QLabel("오디오 파일:")
+        self.audio_path_edit = QLineEdit()
+        self.btn_browse_audio = QPushButton("오디오 선택")
+        self.btn_browse_audio.clicked.connect(self.select_audio_file)
+        self.btn_clear_audio = QPushButton("초기화")
+        self.btn_clear_audio.clicked.connect(self.clear_audio_selection)
+        audio_layout.addWidget(self.audio_label)
+        audio_layout.addWidget(self.audio_path_edit)
+        audio_layout.addWidget(self.btn_browse_audio)
+        audio_layout.addWidget(self.btn_clear_audio)
+        layout.addLayout(audio_layout)
 
-        self.btn_panel = QVBoxLayout()
-        self.btn_panel.setAlignment(Qt.AlignTop)
-        self.btn_add = QPushButton()
-        self.btn_to_timeline = QPushButton()
-        self.btn_remove = QPushButton()
-        self.btn_clear = QPushButton()
-        
-        for btn in [self.btn_add, self.btn_to_timeline, self.btn_remove, self.btn_clear]:
-            btn.setFixedWidth(130)
-            btn.setFixedHeight(38)
-            btn.setCursor(Qt.PointingHandCursor)
-            self.btn_panel.addWidget(btn)
-        self.mid_container.addLayout(self.btn_panel, 2)
-        self.main_layout.addLayout(self.mid_container)
+        self.timeline_title = QLabel("🎬 작업 목록")
+        layout.addWidget(self.timeline_title)
+
+        self.merge_progress = QProgressBar()
+        layout.addWidget(self.merge_progress)
 
         self.merge_log = QTextEdit()
         self.merge_log.setReadOnly(True)
-        self.merge_log.setMaximumHeight(100)
-        self.main_layout.addWidget(self.merge_log)
+        layout.addWidget(self.merge_log)
 
-        self.btn_run = QPushButton()
-        self.btn_run.setFixedHeight(50)
-        self.btn_run.setCursor(Qt.PointingHandCursor)
-        self.btn_run.setStyleSheet("background-color: #28a745; color: white; font-weight: bold;")
-        self.main_layout.addWidget(self.btn_run)
+        self.btn_run = QPushButton("영상 자동 합치기 실행")
+        self.btn_run.setFixedHeight(45)
+        self.btn_run.clicked.connect(self.run_auto_merge)
+        layout.addWidget(self.btn_run)
 
-        self.setLayout(self.main_layout)
+    def natural_sort_key(self, s):
+        return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
 
-        self.btn_add.clicked.connect(self.import_videos)
-        self.btn_to_timeline.clicked.connect(self.add_to_timeline)
-        self.btn_remove.clicked.connect(self.remove_from_timeline)
-        self.btn_clear.clicked.connect(self.clear_all)
-        self.btn_run.clicked.connect(self.run_video_merge)
+    def select_input_folder(self):
+        dir_path = QFileDialog.getExistingDirectory(self, 'Select Folder')
+        if dir_path:
+            self.input_path_edit.setText(dir_path)
+            files = [os.path.join(dir_path, f) for f in os.listdir(dir_path) if f.lower().endswith(('.mp4', '.ts', '.mkv', '.mov'))]
+            files.sort(key=self.natural_sort_key)
+            if files:
+                self.input_video_paths = files
+                self.merge_log.clear()
+                self.merge_progress.setValue(0)
+                self.merge_log.append(f"📁 {len(files)}개 파일을 순서대로 찾았습니다.")
+                for f in files: self.merge_log.append(f" -> {os.path.basename(f)}")
+            else:
+                QMessageBox.warning(self, "경고", "해당 폴더에 영상 파일이 없습니다.")
 
-    def import_videos(self):
-        files, _ = QFileDialog.getOpenFileNames(self, 'Select Media', '', 'Video Files (*.mp4 *.avi *.mkv *.mov *.webm)')
-        if files:
-            for f in files:
-                self.source_list.addItem(f)
-                self.merge_log.append(f"➕ 소스 추가: {os.path.basename(f)}")
+    def select_audio_file(self):
+        file, _ = QFileDialog.getOpenFileName(self, '오디오 선택', '', 'Media Files (*.mov *.mp4 *.ts *.mp3 *.wav)')
+        if file:
+            self.selected_audio_path = file
+            self.audio_path_edit.setText(os.path.basename(file))
+            self.merge_log.append(f"🔊 소리 소스: {os.path.basename(file)}")
 
-    def add_to_timeline(self):
-        selected = self.source_list.selectedItems()
-        if not selected: return
-        for item in selected:
-            path = item.text()
-            name = os.path.basename(path)
-            list_item = QListWidgetItem(name)
-            list_item.setData(Qt.UserRole, path)
-            list_item.setTextAlignment(Qt.AlignCenter)
-            list_item.setSizeHint(QSize(140, 90))
-            self.timeline_list.addItem(list_item)
-            self.merge_log.append(f"📥 타임라인 등록: {name}")
+    def clear_audio_selection(self):
+        self.selected_audio_path = None
+        self.audio_path_edit.clear()
+        self.merge_log.append("🔊 소리 선택 해제 (무음 병합)")
 
-    def remove_from_timeline(self):
-        items = self.timeline_list.selectedItems()
-        if not items: return
-        for item in items:
-            self.merge_log.append(f"➖ 타임라인 제거: {item.text()}")
-            self.timeline_list.takeItem(self.timeline_list.row(item))
-
-    def clear_all(self):
-        if self.timeline_list.count() == 0: return
-        self.timeline_list.clear()
-        self.merge_log.append("🧹 타임라인 초기화 완료")
-
-    def run_video_merge(self):
-        count = self.timeline_list.count()
-        if count < 2:
-            QMessageBox.warning(self, "Warning", self.main_app.t('error_min_videos'))
+    def run_auto_merge(self):
+        if not self.input_video_paths:
+            QMessageBox.warning(self, "Warning", "먼저 병합할 폴더를 선택해주세요.")
             return
-        
-        video_paths = [self.timeline_list.item(i).data(Qt.UserRole) for i in range(count)]
-        save_path, _ = QFileDialog.getSaveFileName(self, 'Save Merged Video', 'merged.mp4', 'Video (*.mp4)')
-        
+        save_path, _ = QFileDialog.getSaveFileName(self, '결과 저장', 'final_merged.mp4', 'MP4 (*.mp4);;TS (*.ts)')
         if save_path:
             self.btn_run.setEnabled(False)
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-            try:
-                merge_videos(video_paths, save_path, log_callback=self.merge_log.append)
-                QMessageBox.information(self, "Success", self.main_app.t('success_merge'))
-            except Exception as e:
-                self.merge_log.append(f"❌ 오류: {str(e)}")
-                QMessageBox.critical(self, "Error", f"Failure: {str(e)}")
-            finally:
-                self.btn_run.setEnabled(True)
-                QApplication.restoreOverrideCursor()
+            self.merge_progress.setValue(0)
+            self.worker = MergeWorker(self.input_video_paths, save_path, self.selected_audio_path)
+            self.worker.log.connect(self.merge_log.append)
+            self.worker.progress.connect(self.merge_progress.setValue)
+            self.worker.finished.connect(self.on_merge_finished)
+            self.worker.start()
+
+    def on_merge_finished(self, success, msg):
+        self.btn_run.setEnabled(True)
+        if success:
+            self.merge_log.append(f"✅ 완료: {msg}")
+            QMessageBox.information(self, "완료", "영상 병합이 성공적으로 끝났습니다.")
+        else:
+            self.merge_log.append(f"❌ 실패: {msg}")
+            QMessageBox.critical(self, "오류", f"병합 중 오류가 발생했습니다: {msg}")
