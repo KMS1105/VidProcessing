@@ -149,6 +149,7 @@ def prepare_model(scale, weights_dir, log_func=None):
                 if log_func: log_func(f"✅ 변환 완료: {os.path.basename(xml_path)}")
                 if os.path.exists(temp_onnx):
                     try: os.remove(temp_onnx)
+                    
                     except: pass
             else:
                 error_msg = str(e).strip()
