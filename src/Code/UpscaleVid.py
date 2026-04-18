@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QLineEdit, QSpinBox, QComboBox, QTextEdit, 
     QProgressBar, QVBoxLayout, QSizePolicy)
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
+from setting import UI_TEXTS
 
 class ModelSetupWorker(QThread):
     log = pyqtSignal(str)
@@ -23,14 +24,25 @@ class ModelSetupWorker(QThread):
         super().__init__()
         self.weights_dir = weights_dir
 
-def run_split_upscale(input_path, num_splits, target_parts, model_path, tile=800, output_folder='./Vid', progress_callback=None, log_callback=None):
+def run_split_upscale(
+    input_path, 
+    num_splits, 
+    target_parts, 
+    model_path, 
+    tile=800, 
+    output_folder='./Vid', 
+    progress_callback=None, 
+    log_callback=None,
+    lang='ko'
+    ):
+    
     import os
     import glob
     import shutil
     
-    print(f"DEBUG: model_path = {model_path}")
     if not os.path.exists(model_path):
-        raise FileNotFoundError(f"모델 파일을 찾을 수 없습니다: {model_path}")
+        raise FileNotFoundError(f"log_model_not_found|{model_path}")
+        
     tile = int(tile)
     num_splits = int(num_splits)
     core = ov.Core()
@@ -61,11 +73,16 @@ def run_split_upscale(input_path, num_splits, target_parts, model_path, tile=800
     processed_count = 0
     actual_out_w, actual_out_h = 0, 0 
     fatal_error = False
+    
+    def get_t(key): 
+        return UI_TEXTS[lang].get(key, key)
 
     if is_ov_model:
         if log_callback:
-            log_callback(f"[{time.strftime('%H:%M:%S')}] 🚀 가속 장치: {target_device}")
-            log_callback(f"[{time.strftime('%H:%M:%S')}] 📦 모델: {model_name}")
+            from setting import get_hardware_gpu_name, get_intel_gpu_name
+            device_name = get_hardware_gpu_name() or get_intel_gpu_name() or target_device
+            log_callback(f"log_device_info|{device_name}")
+            log_callback(f"log_model_info|{model_name}")
             
         ov_model = core.read_model(model_path)
         ov_model.reshape([1, 3, new_h, new_w])
@@ -94,7 +111,7 @@ def run_split_upscale(input_path, num_splits, target_parts, model_path, tile=800
             test_res = compiled_model(inp.transpose(2, 0, 1)[np.newaxis, ...])[compiled_model.output(0)]
             actual_out_h, actual_out_w = test_res.shape[2], test_res.shape[3]
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            if log_callback: log_callback(f"[{time.strftime('%H:%M:%S')}] ✅ 해상도 최적화 완료: {actual_out_w}x{actual_out_h}")
+            if log_callback: log_callback(f"log_res_optimized|{actual_out_w}x{actual_out_h}")
     else:
         from realesrgan import RealESRGANer
         from basicsr.archs.rrdbnet_arch import RRDBNet
@@ -114,16 +131,20 @@ def run_split_upscale(input_path, num_splits, target_parts, model_path, tile=800
     
     temp_ts_files = []
 
+    if log_callback:
+        log_callback(f"log_res_optimized|{actual_out_w}x{actual_out_h}")
+
     for part_idx in target_parts_validated:
         if fatal_error:
-            if log_callback: log_callback(f"[{time.strftime('%H:%M:%S')}] 🛑 하드웨어 오류로 인해 작업을 즉시 중단합니다.")
+            if log_callback: log_callback("log_fatal_error")
             break
             
         start_f, end_f = parts_ranges[part_idx]
         output_part_path = os.path.join(parts_dir, f"part_{part_idx + 1}.ts")
         
-        if log_callback: log_callback(f"[{time.strftime('%H:%M:%S')}] 🎬 파트 {part_idx + 1}/{num_splits} 시작 (프레임 {start_f}~{end_f})")
-        
+        if log_callback:
+            log_callback(f"log_part_start|{part_idx + 1}|{num_splits}|{start_f}|{end_f}")
+              
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
         
         base_src = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -179,7 +200,7 @@ def run_split_upscale(input_path, num_splits, target_parts, model_path, tile=800
                 if is_ov_model: infer_queue.wait_all()
             except Exception as e:
                 fatal_error = True
-                if log_callback: log_callback(f"[{time.strftime('%H:%M:%S')}] ⚠️ 오류 발생: {e}")
+                if log_callback: log_callback(f"log_error|{e}")
             finally:
                 write_queue.put(None)
 
@@ -190,12 +211,12 @@ def run_split_upscale(input_path, num_splits, target_parts, model_path, tile=800
         
         if os.path.exists(output_part_path) and os.path.getsize(output_part_path) > 0:
             temp_ts_files.append(output_part_path)
-            if log_callback: log_callback(f"[{time.strftime('%H:%M:%S')}] ✅ 파트 {part_idx + 1} 저장 완료")
+            if log_callback: log_callback(f"log_part_saved|{part_idx + 1}")
     
     cap.release()
 
     if not fatal_error and len(temp_ts_files) == len(target_parts_validated):
-        if log_callback: log_callback(f"[{time.strftime('%H:%M:%S')}] 🔄 모든 파트 병합 및 오디오 합성 시작...")
+        if log_callback: log_callback("log_merge_start")
         final_merged_path = os.path.join(final_output_dir, f"Final_{base_filename}_{model_name}.mp4")
         list_file_path = os.path.join(parts_dir, "join_list.txt")
         with open(list_file_path, "w", encoding="utf-8") as f:
@@ -209,7 +230,9 @@ def run_split_upscale(input_path, num_splits, target_parts, model_path, tile=800
         ]
         subprocess.run(merge_cmd, stderr=subprocess.DEVNULL)
         if os.path.exists(list_file_path): os.remove(list_file_path)
-        if log_callback: log_callback(f"[{time.strftime('%H:%M:%S')}] 📁 파트 파일 보존됨: {parts_dir}")
+        if log_callback:
+            log_callback(f"log_parts_saved|{parts_dir}")
+            log_callback("log_upscale_complete")
         
     if progress_callback: progress_callback(100)
     return final_output_dir
@@ -225,8 +248,8 @@ class VideoUpscaleWorker(QThread):
     def run(self):
         try:
             res = run_split_upscale(self.input_path, self.num_splits, self.target_parts, self.model_path, self.tile, self.output_folder, self.progress.emit, self.log.emit)
-            self.finished.emit(f"✨ 작업 완료: {os.path.abspath(res)}")
-        except Exception as e: self.finished.emit(f"❌ 작업 실패: {str(e)}")
+            self.finished.emit(f"log_upscale_complete|{os.path.abspath(res)}")
+        except Exception as e: self.finished.emit(f"log_error|{str(e)}")
 
 def create_label_with_info(parent, text_key, tip_key):
     layout = QHBoxLayout()
@@ -236,14 +259,14 @@ def create_label_with_info(parent, text_key, tip_key):
     btn.setStyleSheet("""
         QPushButton { 
             border-radius: 10px; 
-            background-color: #1a73e8; 
-            color: #ffffff; 
+            background-color: #e0e0e0; 
+            color: #202124#ffffff; 
             font-weight: bold; 
             border: None;
         }
         QPushButton:hover { 
-            background-color: #e0e0e0; 
-            color: #202124;           
+            background-color: #1a73e8; 
+            color: #ffffff;           
         }
     """)
     
@@ -268,18 +291,26 @@ def create_video_tab(parent, translations):
     ]:
         row = QHBoxLayout()
         container = create_label_with_info(parent, key, f"{key}_tip")
+        
+        label_obj = container.label_obj
+        label_obj.text_key = key
+        
         if key == 'input_video': 
             parent.vid_input_label = container.label_obj
         else: 
             parent.vid_output_label = container.label_obj
         row.addWidget(container)
         
-        setattr(parent, edit_attr, QLineEdit())
-        row.addWidget(getattr(parent, edit_attr))
+        edit = QLineEdit()
+        setattr(parent, edit_attr, edit)
+        row.addWidget(edit)
         
-        setattr(parent, btn_attr, QPushButton(parent.t('browse')))
+        new_btn = QPushButton(parent.t('browse'))
+        new_btn.text_key = 'browse'  
+        setattr(parent, btn_attr, new_btn)
+        parent.layout().addWidget(new_btn)
         getattr(parent, btn_attr).clicked.connect(click_func)
-        row.addWidget(getattr(parent, btn_attr))
+        row.addWidget(new_btn)
         layout.addLayout(row)
 
     model_row = QHBoxLayout()

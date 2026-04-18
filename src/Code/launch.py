@@ -26,9 +26,6 @@ from setting import (
 )
 from VideoMerge import VideoMergeTab
 
-ffmpeg_path = shutil.which('ffmpeg')
-print(f"DEBUG: 현재 시스템이 인식하는 FFmpeg 경로: {ffmpeg_path}")
-
 class UpscaleApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -43,12 +40,13 @@ class UpscaleApp(QMainWindow):
     def check_ffmpeg_on_launch(self):
         def on_init_ffmpeg_ready(success):
             self.vid_progress.setValue(0)
+            timestamp = time.strftime('%H:%M:%S')
             if success:
-                self.vid_log.append(f"[{time.strftime('%H:%M:%S')}] ✅ FFmpeg 준비 완료")
+                self.vid_log.append(f"[{timestamp}] {self.t('log_ffmpeg_ready')}")
             else:
-                self.vid_log.append(f"[{time.strftime('%H:%M:%S')}] ❌ FFmpeg 초기 준비 실패")
+                self.vid_log.append(f"[{timestamp}] {self.t('log_ffmpeg_fail')}")
         self.ensure_ffmpeg(log_func=self.vid_log.append, progress_func=self.vid_progress.setValue, finished_callback=on_init_ffmpeg_ready)
-
+        
     def ensure_ffmpeg(self, log_func=None, progress_func=None, finished_callback=None):
         def download_task():
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -133,6 +131,7 @@ class UpscaleApp(QMainWindow):
     def change_language(self, lang):
         self.language = lang
         self.update_language()
+        self.refresh_ui_texts()
 
     def browse_image_input(self):
         file, _ = QFileDialog.getOpenFileName(self, self.t('input_image'), '', 'Images (*.png *.jpg *.jpeg *.webp *.bmp)')
@@ -168,6 +167,17 @@ class UpscaleApp(QMainWindow):
         self.tabs.setTabText(0, self.t('tab_image'))
         self.tabs.setTabText(1, self.t('tab_video'))
         self.tabs.setTabText(2, self.t('tab_video_merge'))
+        
+        if hasattr(self, 'img_run_btn'):
+            self.img_run_btn.setText(self.t('upscale_image'))
+        if hasattr(self, 'img_recommend_label'):
+            self.img_recommend_label.setText(get_device_recommendation(self.language))
+        if hasattr(self, 'vid_run_btn'):
+            self.vid_run_btn.setText(self.t('run_video_upscale'))
+        if hasattr(self, 'vid_recommend_label'):
+            self.vid_recommend_label.setText(get_device_recommendation(self.language))
+        if hasattr(self, 'video_merge_tab'):
+            self.video_merge_tab.btn_run.setText(self.t('run_auto_merge'))
 
         if hasattr(self, 'device_info_label'):
             header = self.t('device_label')
@@ -197,9 +207,12 @@ class UpscaleApp(QMainWindow):
             self.vid_tile_label.parent().findChild(QPushButton).setToolTip(self.t('tile_size_tip'))
             self.vid_target_label.setText(self.t('target_parts'))
             self.vid_target_label.parent().findChild(QPushButton).setToolTip(self.t('target_parts_tip'))
-            self.vid_run_btn.setText(self.t('run_video_upscale'))
-            self.vid_recommend_label.setText(get_device_recommendation(self.language))
             
+            if hasattr(self, 'vid_model_label'):
+                self.vid_model_label.setText(self.t('model_select'))
+                btn = self.vid_model_label.parent().findChild(QPushButton)
+                if btn: btn.setToolTip(self.t('model_select_tip'))
+                
             if hasattr(self, 'vid_model_label'):
                 self.vid_model_label.setText(self.t('model_select'))
                 self.vid_model_label.parent().findChild(QPushButton).setToolTip(self.t('model_select_tip'))
@@ -220,6 +233,17 @@ class UpscaleApp(QMainWindow):
         self.dark_action.setText(self.t('menu_dark'))
         self.ko_action.setText(self.t('lang_ko'))
         self.en_action.setText(self.t('lang_en'))
+        
+        timestamp = time.strftime('%H:%M:%S')
+        current_lang_display = self.t('lang_name')
+        log_msg = f"[{timestamp}] {self.t('log_lang_changed').format(current_lang_display)}"
+        
+        if hasattr(self, 'img_log'): 
+            self.img_log.append(log_msg)
+        if hasattr(self, 'vid_log'): 
+            self.vid_log.append(log_msg)
+        if hasattr(self, 'video_merge_tab'):
+            self.video_merge_tab.merge_log.append(log_msg)
 
     def run_image_upscale(self):
         from UpscaleImg import ImageUpscaleWorker
@@ -238,8 +262,52 @@ class UpscaleApp(QMainWindow):
         self.img_worker.start()
         
     def on_image_finished(self, msg):
-        self.img_log.append(msg)
+        timestamp = time.strftime('%H:%M:%S')
+        translated_msg = self.t('log_upscale_complete') if msg == "success" else msg
+        self.img_log.append(f"[{timestamp}] {translated_msg}")
         self.img_run_btn.setEnabled(True)
+        
+    def refresh_ui_texts(self):
+        for btn in self.findChildren(QPushButton):
+            if hasattr(btn, 'text_key'):
+                btn.setText(self.t(btn.text_key))
+        
+    def handle_video_log(self, raw_msg):
+        if hasattr(self, 'last_log') and self.last_log == raw_msg:
+            return
+        self.last_log = raw_msg
+        
+        timestamp = time.strftime('%H:%M:%S')
+        translated = raw_msg  
+
+        if '|' in raw_msg:
+            parts = raw_msg.split('|', 1)
+            key = parts[0]
+            data_str = parts[1]
+
+            if key in UI_TEXTS[self.language]:
+                try:
+                    if key == 'log_device_info':
+                        from setting import get_hardware_gpu_name
+                        device_name = get_hardware_gpu_name()
+                        translated = self.t(key).format(device_name)
+                    if key == 'log_model_info':
+                        model_name = os.path.basename(data_str).replace('.pth', '').replace('.xml', '')
+                        translated = self.t(key).format(model_name)
+                    elif key == 'log_res_optimized':
+                        translated = self.t(key).format(*data_str.split('x'))
+                    else:
+                        data_args = data_str.split('|')
+                        translated = self.t(key).format(*data_args)
+                except Exception:
+                    translated = self.t(key)
+            else:
+                translated = raw_msg 
+        else:
+            if raw_msg in UI_TEXTS[self.language]:
+                translated = self.t(raw_msg)
+        
+        self.vid_log.append(f"[{timestamp}] {translated}")
 
     def run_video_upscale(self):
         self.vid_run_btn.setEnabled(False)
@@ -267,16 +335,20 @@ class UpscaleApp(QMainWindow):
             from UpscaleVid import VideoUpscaleWorker
             if success:
                 self.vid_worker = VideoUpscaleWorker(
-                    input_path, output_folder, num_splits, 
-                    target_parts, tile_size, model_path
+                    input_path=input_path, 
+                    output_folder=output_folder, 
+                    num_splits=num_splits, 
+                    target_parts=target_parts, 
+                    tile=tile_size, 
+                    model_path=model_path
                 )
                 self.vid_worker.progress.connect(self.vid_progress.setValue)
-                self.vid_worker.log.connect(self.vid_log.append)
+                self.vid_worker.log.connect(self.handle_video_log)
                 self.vid_worker.finished.connect(self.on_video_finished)
                 self.vid_worker.start()
             else:
                 self.vid_run_btn.setEnabled(True)
-                self.vid_log.append("FFmpeg 준비 실패")
+                self.vid_log.append(self.t('log_ffmpeg_fail')) 
 
         self.ensure_ffmpeg(
             log_func=self.vid_log.append, 
@@ -284,8 +356,7 @@ class UpscaleApp(QMainWindow):
             finished_callback=on_ffmpeg_ready
         )
         
-    def on_video_finished(self, msg):
-        self.vid_log.append(msg)
+    def on_video_finished(self):
         self.vid_run_btn.setEnabled(True)
 
 if __name__ == "__main__":

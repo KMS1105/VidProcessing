@@ -154,16 +154,16 @@ class VideoMergeTab(QWidget):
                 QMessageBox.warning(self, "경고", "해당 폴더에 영상 파일이 없습니다.")
 
     def select_audio_file(self):
-        file, _ = QFileDialog.getOpenFileName(self, '오디오 선택', '', 'Media Files (*.mov *.mp4 *.ts *.mp3 *.wav)')
+        file, _ = QFileDialog.getOpenFileName(...)
         if file:
             self.selected_audio_path = file
             self.audio_path_edit.setText(os.path.basename(file))
-            self.merge_log.append(f"🔊 소리 소스: {os.path.basename(file)}")
-
+            self.merge_log.append(self.parent.t('log_audio_source').format(os.path.basename(file)))
+            
     def clear_audio_selection(self):
         self.selected_audio_path = None
         self.audio_path_edit.clear()
-        self.merge_log.append("🔊 소리 선택 해제 (무음 병합)")
+        self.merge_log.append(self.parent.t('log_audio_none'))
 
     def run_auto_merge(self):
         if not self.input_video_paths:

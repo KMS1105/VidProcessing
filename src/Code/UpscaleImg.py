@@ -11,7 +11,10 @@ from PyQt5.QtWidgets import (
     QComboBox, QProgressBar, QTextEdit, QVBoxLayout, QApplication, QSpinBox, QSizePolicy
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
-from setting import get_device_info_text, get_device_recommendation, prepare_model
+from setting import (
+    UI_TEXTS, get_device_info_text, 
+    get_device_recommendation, prepare_model
+)
 
 try:
     import torchvision.transforms.functional as F
@@ -66,18 +69,21 @@ class ImageUpscaleWorker(QThread):
                 res = compiled_model(input_data)[compiled_model.output(0)]
                 output = np.squeeze(res).clip(0, 1).transpose(1, 2, 0)
                 output = cv2.cvtColor((output * 255.0).astype(np.uint8), cv2.COLOR_RGB2BGR)
+            
             else:
                 model_arch = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=scale)
                 upsampler = RealESRGANer(scale=scale, model_path=self.model_path, model=model_arch, tile=self.tile_size, half=use_cuda, device='cuda' if use_cuda else 'cpu')
                 output, _ = upsampler.enhance(img, outscale=scale)
+            
             if not os.path.exists(self.output_folder): os.makedirs(self.output_folder)
             save_path = os.path.join(self.output_folder, f"up_{model_name}_{os.path.basename(self.input_path)}")
             res, en_img = cv2.imencode(os.path.splitext(save_path)[1], output)
             if res: en_img.tofile(save_path)
             self.progress.emit(100)
-            self.finished.emit(f"✨ 업스케일 완료")
+            self.finished.emit("log_upscale_complete") 
+        
         except Exception as e:
-            self.finished.emit(f"❌ 오류: {str(e)}")
+            self.finished.emit(f"log_error: {str(e)}")
 
 def create_label_with_info(parent, text_key, tip_key):
     layout = QHBoxLayout()
@@ -87,14 +93,14 @@ def create_label_with_info(parent, text_key, tip_key):
     btn.setStyleSheet("""
         QPushButton { 
             border-radius: 10px; 
-            background-color: #1a73e8; 
-            color: #ffffff; 
+            background-color: #e0e0e0; 
+            color: #202124#ffffff; 
             font-weight: bold; 
             border: None;
         }
         QPushButton:hover { 
-            background-color: #e0e0e0; 
-            color: #202124;           
+            background-color: #1a73e8; 
+            color: #ffffff;           
         }
     """)
     
