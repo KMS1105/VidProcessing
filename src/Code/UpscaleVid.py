@@ -9,7 +9,7 @@ import glob
 import time
 from threading import Thread
 from queue import Queue, Empty
-from openvino.runtime import Core, AsyncInferQueue
+from openvino import Core, AsyncInferQueue
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QPushButton, 
     QLineEdit, QSpinBox, QComboBox, QTextEdit, 
