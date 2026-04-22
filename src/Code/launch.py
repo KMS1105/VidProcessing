@@ -269,7 +269,11 @@ class UpscaleApp(QMainWindow):
         
     def on_image_finished(self, msg):
         timestamp = time.strftime('%H:%M:%S')
-        translated_msg = self.t('log_upscale_complete') if msg == "success" else msg
+        if '|' in msg:
+            key, data = msg.split('|', 1)
+            translated_msg = self.t(key).format(data) if key in UI_TEXTS.get(self.language, {}) else msg
+        else:
+            translated_msg = self.t(msg) if msg in UI_TEXTS.get(self.language, {}) else msg
         self.img_log.append(f"[{timestamp}] {translated_msg}")
         self.img_run_btn.setEnabled(True)
         

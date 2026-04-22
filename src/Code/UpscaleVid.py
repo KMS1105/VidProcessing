@@ -79,9 +79,6 @@ def run_split_upscale(
 
     if is_ov_model:
         if log_callback:
-            from setting import get_hardware_gpu_name, get_intel_gpu_name
-            device_name = get_hardware_gpu_name() or get_intel_gpu_name() or target_device
-            log_callback(f"log_device_info|{device_name}")
             log_callback(f"log_model_info|{model_name}")
             
         ov_model = core.read_model(model_path)
@@ -211,7 +208,7 @@ def run_split_upscale(
         
         if os.path.exists(output_part_path) and os.path.getsize(output_part_path) > 0:
             temp_ts_files.append(output_part_path)
-            if log_callback: log_callback(f"log_part_saved|{part_idx + 1}")
+            if log_callback: log_callback(f"log_parts_saved|{part_idx + 1}")
     
     cap.release()
 

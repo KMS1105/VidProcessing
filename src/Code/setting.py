@@ -96,7 +96,7 @@ def prepare_model(scale, weights_dir, log_func=None, lang='ko'):
         try:
             urllib.request.urlretrieve(model_data['url'], pth_path)
         except urllib.error.HTTPError as e:
-            from PySide6.QtWidgets import QMessageBox 
+            from PyQt5.QtWidgets import QMessageBox
 
             msg = QMessageBox()
             msg.setIcon(QMessageBox.Critical)
