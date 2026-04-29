@@ -50,7 +50,6 @@ python Launch.py
 * 멀티스레딩 파이프라인 처리
 * OpenVINO 비동기 추론 지원
 * FFmpeg 자동 인코딩
-* GPU / CPU 모델 자동 전환
 
 ---
 
@@ -58,6 +57,13 @@ python Launch.py
 
 * 중간 저장 된 (.ts)파일 병합
 * 입력 오디오 선택 가능 (AAC)
+
+---
+
+### 배경 제거
+* **Modnet**을 통해 (객체, 배경) 감지, 제거
+* **Bisenet**을 통해 얼굴 감지
+* **mod_fp16** 경계선 보완
 
 ---
 
