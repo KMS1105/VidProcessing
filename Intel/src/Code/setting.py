@@ -174,7 +174,7 @@ def prepare_bg_model(log_func=None):
             import sys
             sys.path.append(weights_dir)
 
-            from rembg.model import BiSeNet
+            from rembgs.model import BiSeNet
             import torch
 
             net = BiSeNet(n_classes=19)

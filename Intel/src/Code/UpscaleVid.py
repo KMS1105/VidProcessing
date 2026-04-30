@@ -246,7 +246,9 @@ class VideoUpscaleWorker(QThread):
         try:
             res = run_split_upscale(self.input_path, self.num_splits, self.target_parts, self.model_path, self.tile, self.output_folder, self.progress.emit, self.log.emit)
             self.finished.emit(f"log_upscale_complete|{os.path.abspath(res)}")
-        except Exception as e: self.finished.emit(f"log_error|{str(e)}")
+        except Exception as e: 
+            self.finished.emit(f"log_error|{str(e)}")
+            self.progress.emit(0)
 
 def create_video_tab(parent, translations):
     widget = QWidget()

@@ -92,6 +92,7 @@ class ImageUpscaleWorker(QThread):
         
         except Exception as e:
             self.finished.emit(f"log_error: {str(e)}")
+            self.progress.emit(0)
 
 def create_label_with_info(parent, text_key, tip_key):
     layout = QHBoxLayout()
