@@ -43,9 +43,11 @@ class RemoveBGWorker(QThread):
                     except:
                         return core.compile_model(path, "CPU")
 
+            # MODNet load
             modnet = load(model_paths["modnet"])
             edge_model = None
             
+            # Edge model load
             if "model_fp16" in model_paths:
                 try:
                     edge_model = load(model_paths["model_fp16"])
@@ -62,6 +64,8 @@ class RemoveBGWorker(QThread):
 
             try:
                 os.environ["OMP_NUM_THREADS"] = "4"
+                
+                # U^2-Net(rembg) create session
                 rembg_session = new_session("u2net", providers=["CPUExecutionProvider"])
             except:
                 rembg_session = new_session()
@@ -78,13 +82,15 @@ class RemoveBGWorker(QThread):
 
                 img_m = cv2.resize(img, (1024, 1024)).astype(np.float32) / 255.0
                 inp_m = img_m.transpose(2, 0, 1)[None]
+                
+                #  MODNet model inference
                 alpha = list(modnet([inp_m]).values())[0].squeeze()
                 alpha = cv2.resize(alpha, (w, h))
 
                 alpha = np.clip(alpha, 0, 1)
 
                 if prev_alpha is not None:
-                    alpha = 0.5 * alpha + 0.5 * prev_alpha
+                    alpha = 0.7 * alpha + 0.3 * prev_alpha
                 prev_alpha = alpha.copy()
 
                 alpha[alpha < 0.01] = 0
@@ -98,21 +104,22 @@ class RemoveBGWorker(QThread):
                     edge_mask = (alpha > 0.1) & (alpha < 0.9)
 
                     alpha[edge_mask] = (
-                        0.7 * alpha[edge_mask] +
-                        0.3 * edge[edge_mask]
+                        0.9 * alpha[edge_mask] +
+                        0.1 * edge[edge_mask]
                     )
 
                 alpha = np.clip(alpha, 0, 1)
 
+                # U^2-Net(rembg) model inference
                 rembg_result = remove(img, session=rembg_session)
                 rembg_alpha = rembg_result[:, :, 3].astype(np.float32) / 255.0
                 rembg_alpha = cv2.resize(rembg_alpha, (w, h))
                 rembg_alpha = np.clip(rembg_alpha, 0, 1)
 
-                internal_mask = (rembg_alpha >= 0.3)
-                alpha[internal_mask] = 1.0
+                internal_mask = (rembg_alpha >= 0.15)
+                alpha[internal_mask] = np.maximum(alpha[internal_mask], rembg_alpha[internal_mask])
 
-                kernel_size = 13  
+                kernel_size = 5  
                 kernel = np.ones((kernel_size, kernel_size), np.uint8)
                 alpha_uint8 = (alpha * 255).astype(np.uint8)
                 dilated_alpha = cv2.dilate(alpha_uint8, kernel, iterations=1)
