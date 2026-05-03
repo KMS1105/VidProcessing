@@ -35,7 +35,6 @@ class RemoveBGWorker(QThread):
             self.log.emit("model_loading")
             core = ov.Core()
 
-            # 모델 로딩 설정
             rvm_model_path = os.path.join(rvm_weights_dir, "robust-video-matting-mobilenetv3")
             model_paths = prepare_bg_model(lambda m: self.log.emit(m))
             
@@ -72,8 +71,9 @@ class RemoveBGWorker(QThread):
 
                 img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 img_hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-                # 1. 모델 추론 (MODNet 허용 범위 0.2로 확장 적용)
+
                 main_alpha = None
                 if rvm_model:
                     inp = cv2.resize(img_rgb, (1024, 1024)).astype(np.float32) / 255.0
@@ -85,68 +85,51 @@ class RemoveBGWorker(QThread):
                 res_rembg = remove(img_rgb, session=rembg_session)
                 rembg_alpha = cv2.resize(res_rembg[:, :, 3].astype(np.float32) / 255.0, (w, h))
 
-                confidence = np.abs(rembg_alpha - main_alpha) if main_alpha is not None else np.zeros_like(rembg_alpha)
-
-                if main_alpha is not None:
-                    current_alpha = np.where((main_alpha > 0.20) & (rembg_alpha > 0.20), rembg_alpha, np.maximum(main_alpha, rembg_alpha))
-                else:
-                    current_alpha = rembg_alpha
-
+                current_alpha = np.maximum(main_alpha, rembg_alpha) if main_alpha is not None else rembg_alpha
                 current_alpha = np.clip(current_alpha, 0, 1)
 
-                # 2. 채도 및 명도 기반 연속성 분석
-                alpha_influence = 0.3
                 if prev_hsv is not None:
-                    diff_hsv = cv2.absdiff(img_hsv, prev_hsv)
-                    s_diff = np.mean(diff_hsv[:, :, 1]) / 255.0
-                    v_diff = np.mean(diff_hsv[:, :, 2]) / 255.0
-                    if (s_diff + v_diff) < 0.05:
-                        alpha_influence = 0.7
+                    diff = cv2.absdiff(img_hsv, prev_hsv)
+                    motion_map = (diff[:,:,1].astype(np.float32) + diff[:,:,2].astype(np.float32)) / 255.0
+                    motion_mask = motion_map > 0.15
 
-                if prev_alpha is not None:
-                    alpha = (1.0 - alpha_influence) * current_alpha + alpha_influence * prev_alpha
+                    if prev_alpha is not None:
+                        alpha_A = current_alpha.copy()
+                        alpha_A[~motion_mask] = 0.7 * prev_alpha[~motion_mask] + 0.3 * current_alpha[~motion_mask]
+                    else:
+                        alpha_A = current_alpha
                 else:
-                    alpha = current_alpha
+                    alpha_A = current_alpha
 
-                # 3. 이진화 (반투명 얼룩 방지)
-                alpha = np.where(alpha >= 0.5, 1.0, 0.0)
+                alpha_A = cv2.GaussianBlur(alpha_A, (5,5), 0)
 
-                # 4. 테두리 추출
-                alpha_u8 = (alpha * 255).astype(np.uint8)
-                edges = cv2.Canny(alpha_u8, 100, 200)
-                edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=1)
+                edges = cv2.Canny(gray, 50, 150)
+                edges = cv2.dilate(edges, np.ones((3,3), np.uint8), iterations=2)
 
-                # 5. 닫힌/열린 테두리 분석
-                contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                mask_for_fill = np.zeros_like(alpha_u8)
+                edges_closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((5,5), np.uint8))
+
+                contours, _ = cv2.findContours(edges_closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                fill_mask = np.zeros((h, w), np.uint8)
 
                 for cnt in contours:
-                    perimeter = cv2.arcLength(cnt, True)
-                    if perimeter > 0:
-                        # 튜플 타입 오류가 발생하지 않도록 isContourConvex 및 기본 면적/둘레 조건으로만 판단하도록 수정
-                        approx = cv2.approxPolyDP(cnt, 0.02 * perimeter, True)
-                        is_closed = cv2.isContourConvex(approx) or (cv2.contourArea(cnt) > 50)
-                        
-                        if is_closed:
-                            cv2.drawContours(mask_for_fill, [cnt], -1, 1, thickness=-1)
+                    if cv2.contourArea(cnt) > 500: 
+                        cv2.drawContours(fill_mask, [cnt], -1, 255, -1)
 
-                alpha = np.where(mask_for_fill > 0, 1.0, alpha)
+                alpha_B = fill_mask.astype(np.float32) / 255.0
+                alpha = np.maximum(alpha_A, alpha_B * 0.8)
 
-                # 6. 결과 합성 및 테두리 색상 처리
+                alpha_u8 = (alpha * 255).astype(np.uint8)
+                _, alpha_bin = cv2.threshold(alpha_u8, 128, 255, cv2.THRESH_BINARY)
+
+                alpha = alpha_bin.astype(np.float32) / 255.0
+
                 result = (frame * alpha[..., None]).astype(np.uint8)
-
-                edge_y, edge_x = np.where(edges > 0)
-                for ey, ex in zip(edge_y, edge_x):
-                    if confidence[ey, ex] > 0.3:
-                        result[ey, ex] = [0, 0, 255] # Red
-                    else:
-                        result[ey, ex] = [255, 255, 0] # Cyan
-
                 out.write(result)
-                
+
                 prev_alpha = alpha
                 prev_hsv = img_hsv
                 i += 1
+
                 if i % 10 == 0 or i == total:
                     self.progress.emit(int(i * 100 / total))
 
@@ -159,7 +142,6 @@ class RemoveBGWorker(QThread):
             if cap: cap.release()
             if out: out.release()
             self.finished.emit()
-
 
 class RemoveBGTab(QWidget):
     def __init__(self, parent=None):
