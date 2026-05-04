@@ -62,9 +62,7 @@ python Launch.py
 ---
 
 ### [Intel] 배경 제거
-* **Modnet**을 통해 (객체, 배경) 감지, 제거
-* **Bisenet**을 통해 얼굴 감지
-* **mod_fp16** 경계선 보정
+
 
 ---
 
