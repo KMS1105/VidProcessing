@@ -87,16 +87,10 @@ class RemoveBGWorker(QThread):
                 if not ret:
                     break
 
-                # =========================
-                # 🔥 컷 감지
-                # =========================
                 scene_cut = False
                 if prev_frame is not None:
                     scene_cut = is_scene_cut(prev_frame, frame)
 
-                # =========================
-                # 🔥 전처리
-                # =========================
                 lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
                 l, a, b = cv2.split(lab)
                 clahe = cv2.createCLAHE(2.0, (8,8))
@@ -123,9 +117,6 @@ class RemoveBGWorker(QThread):
                 frame_input = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
                 img_rgb = cv2.cvtColor(frame_input, cv2.COLOR_BGR2RGB)
 
-                # =========================
-                # 🔥 모델
-                # =========================
                 main_alpha = None
                 if rvm_model:
                     inp = cv2.resize(img_rgb, (512, 512)).astype(np.float32) / 255.0
@@ -144,10 +135,6 @@ class RemoveBGWorker(QThread):
                     alpha = rembg_alpha
 
                 alpha = np.clip(alpha, 0, 1)
-
-                # =========================
-                # 🔥 hard fail (상단 포함)
-                # =========================
                 hard_fail = False
 
                 if prev_alpha is not None and not scene_cut:
@@ -166,10 +153,7 @@ class RemoveBGWorker(QThread):
 
                 if hard_fail and prev_alpha is not None:
                     alpha = prev_alpha.copy()
-
-                # =========================
-                # 🔥 타일 기반 selective 복구
-                # =========================
+                    
                 if prev_alpha is not None and prev_frame is not None and not scene_cut:
                     tile = 32
                     alpha_new = alpha.copy()
@@ -196,18 +180,12 @@ class RemoveBGWorker(QThread):
                                 )
 
                     alpha = alpha_new
-
-                # =========================
-                # 🔥 구멍 메우기
-                # =========================
+                    
                 alpha_u8 = (alpha * 255).astype(np.uint8)
                 kernel = np.ones((7,7), np.uint8)
                 alpha_fill = cv2.morphologyEx(alpha_u8, cv2.MORPH_CLOSE, kernel)
                 alpha = np.maximum(alpha, alpha_fill.astype(np.float32)/255.0)
 
-                # =========================
-                # 🔥 이진화
-                # =========================
                 alpha_bin = (alpha > 0.6).astype(np.float32)
                 strong_fg = (alpha > 0.8).astype(np.float32)
                 alpha_bin = np.maximum(alpha_bin, strong_fg)
@@ -215,9 +193,6 @@ class RemoveBGWorker(QThread):
                 alpha_bin = cv2.medianBlur((alpha_bin * 255).astype(np.uint8), 3) / 255.0
                 alpha = alpha_bin
 
-                # =========================
-                # 🔥 합성
-                # =========================
                 bg_frame = np.full_like(frame, bg_color)
                 fg_part = (frame * alpha[..., None]).astype(np.float32)
                 bg_part = (bg_frame * (1.0 - alpha[..., None])).astype(np.float32)
