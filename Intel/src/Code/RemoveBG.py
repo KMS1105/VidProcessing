@@ -5,9 +5,10 @@ import numpy as np
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QProgressBar, QTextEdit,
-    QFileDialog
+    QFileDialog, QColorDialog
 )
 from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtGui import QColor
 from setting import prepare_bg_model, DragLineEdit
 from rembg import remove, new_session
 
@@ -16,20 +17,36 @@ u2net_dir = os.path.join(rvm_weights_dir, 'RemBG')
 os.environ["HF_HOME"] = rvm_weights_dir
 os.environ["U2NET_HOME"] = u2net_dir
 
+def is_scene_cut(prev_frame, curr_frame):
+    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+    curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
+
+    hist1 = cv2.calcHist([prev_gray], [0], None, [64], [0,256])
+    hist2 = cv2.calcHist([curr_gray], [0], None, [64], [0,256])
+
+    hist1 = cv2.normalize(hist1, hist1).flatten()
+    hist2 = cv2.normalize(hist2, hist2).flatten()
+
+    diff = np.sum(np.abs(hist1 - hist2))
+
+    return diff > 0.4   
 
 class RemoveBGWorker(QThread):
     progress = pyqtSignal(int)
     log = pyqtSignal(str)
     finished = pyqtSignal()
 
-    def __init__(self, input_path, output_path):
+    def __init__(self, input_path, output_path, chromakey_rgb):
         super().__init__()
         self.input_path = input_path
         self.output_path = output_path
+        # PyQt QColor 값을 BGR 튜플 형태로 변환
+        self.chromakey_rgb = chromakey_rgb
 
     def run(self):
         cap = None
         out = None
+        bg_color = (self.chromakey_rgb.blue(), self.chromakey_rgb.green(), self.chromakey_rgb.red())
 
         try:
             self.log.emit("model_loading")
@@ -62,7 +79,7 @@ class RemoveBGWorker(QThread):
                 rembg_session = new_session()
 
             prev_alpha = None
-            prev_hsv = None
+            prev_frame = None
             i = 0
 
             while i < total:
@@ -70,10 +87,45 @@ class RemoveBGWorker(QThread):
                 if not ret:
                     break
 
-                img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                img_hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                # =========================
+                # 🔥 컷 감지
+                # =========================
+                scene_cut = False
+                if prev_frame is not None:
+                    scene_cut = is_scene_cut(prev_frame, frame)
 
+                # =========================
+                # 🔥 전처리
+                # =========================
+                lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+                l, a, b = cv2.split(lab)
+                clahe = cv2.createCLAHE(2.0, (8,8))
+                l = clahe.apply(l)
+                frame_pre = cv2.cvtColor(cv2.merge([l,a,b]), cv2.COLOR_LAB2BGR)
+
+                gray_pre = cv2.cvtColor(frame_pre, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+                lift = np.clip((0.5 - gray_pre) * 2.0, 0, 1)
+                frame_pre = frame_pre.astype(np.float32)
+                frame_pre = frame_pre * (1 + 0.2 * lift[..., None])
+                frame_pre = np.clip(frame_pre, 0, 255).astype(np.uint8)
+
+                gamma = 1.15
+                frame_norm = frame_pre.astype(np.float32) / 255.0
+                frame_norm = np.power(frame_norm, gamma)
+                frame_norm = (frame_norm * 255).astype(np.uint8)
+
+                hsv = cv2.cvtColor(frame_norm, cv2.COLOR_BGR2HSV).astype(np.float32)
+                hsv[:,:,1] *= 1.1
+                hsv[:,:,2] *= 1.05
+                hsv[:,:,1] = np.clip(hsv[:,:,1], 0, 255)
+                hsv[:,:,2] = np.clip(hsv[:,:,2], 0, 255)
+
+                frame_input = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+                img_rgb = cv2.cvtColor(frame_input, cv2.COLOR_BGR2RGB)
+
+                # =========================
+                # 🔥 모델
+                # =========================
                 main_alpha = None
                 if rvm_model:
                     inp = cv2.resize(img_rgb, (512, 512)).astype(np.float32) / 255.0
@@ -87,45 +139,94 @@ class RemoveBGWorker(QThread):
 
                 if main_alpha is not None:
                     conf = cv2.GaussianBlur(main_alpha, (11, 11), 0)
-                    alpha_A = conf * main_alpha + (1 - conf) * rembg_alpha
+                    alpha = conf * main_alpha + (1 - conf) * rembg_alpha
                 else:
-                    alpha_A = rembg_alpha
+                    alpha = rembg_alpha
 
-                alpha_A = np.clip(alpha_A, 0, 1)
+                alpha = np.clip(alpha, 0, 1)
 
+                # =========================
+                # 🔥 hard fail (상단 포함)
+                # =========================
+                hard_fail = False
 
-                sat = img_hsv[:, :, 1].astype(np.float32) / 255.0
-                val = img_hsv[:, :, 2].astype(np.float32) / 255.0
-                low_sv = ((sat < 0.25) & (val < 0.35)).astype(np.float32)
-                alpha_A = np.clip(alpha_A + 0.25 * low_sv * alpha_A, 0, 1)
+                if prev_alpha is not None and not scene_cut:
+                    if np.mean(alpha) < 0.12:
+                        hard_fail = True
 
-                if prev_alpha is not None:
-                    alpha_A = 0.85 * alpha_A + 0.15 * prev_alpha
+                    h_part = int(h * 0.4)
+                    prev_top = prev_alpha[:h_part]
+                    curr_top = alpha[:h_part]
 
-                alpha_A = cv2.GaussianBlur(alpha_A, (3, 3), 0)
+                    prev_fg_top = np.mean(prev_top > 0.5)
+                    curr_fg_top = np.mean(curr_top > 0.5)
 
-                edges = cv2.Canny(gray, 30, 100)
-                edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=2)
+                    if prev_fg_top > 0.05 and curr_fg_top < prev_fg_top * 0.3:
+                        hard_fail = True
 
-                contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                fill_mask = np.zeros((h, w), np.uint8)
+                if hard_fail and prev_alpha is not None:
+                    alpha = prev_alpha.copy()
 
-                for cnt in contours:
-                    if cv2.contourArea(cnt) > 1200:
-                        cv2.drawContours(fill_mask, [cnt], -1, 255, -1)
+                # =========================
+                # 🔥 타일 기반 selective 복구
+                # =========================
+                if prev_alpha is not None and prev_frame is not None and not scene_cut:
+                    tile = 32
+                    alpha_new = alpha.copy()
 
-                alpha_B = fill_mask.astype(np.float32) / 255.0
+                    for y in range(0, h, tile):
+                        for x in range(0, w, tile):
+                            y2 = min(y + tile, h)
+                            x2 = min(x + tile, w)
 
-                alpha = np.clip(alpha_A + 0.25 * alpha_B, 0, 1)
+                            curr_patch = frame[y:y2, x:x2]
+                            prev_patch = prev_frame[y:y2, x:x2]
 
-                alpha = cv2.GaussianBlur(alpha, (3, 3), 0)
-                alpha = cv2.medianBlur((alpha * 255).astype(np.uint8), 5) / 255.0
+                            diff = np.mean(np.abs(curr_patch.astype(np.float32) - prev_patch.astype(np.float32))) / 255.0
 
-                result = (frame * alpha[..., None]).astype(np.uint8)
+                            if diff < 0.08:
+                                prev_a = prev_alpha[y:y2, x:x2]
+                                curr_a = alpha[y:y2, x:x2]
+
+                                restore_mask = (curr_a < 0.3).astype(np.float32)
+
+                                alpha_new[y:y2, x:x2] = np.maximum(
+                                    curr_a,
+                                    0.7 * prev_a * restore_mask
+                                )
+
+                    alpha = alpha_new
+
+                # =========================
+                # 🔥 구멍 메우기
+                # =========================
+                alpha_u8 = (alpha * 255).astype(np.uint8)
+                kernel = np.ones((7,7), np.uint8)
+                alpha_fill = cv2.morphologyEx(alpha_u8, cv2.MORPH_CLOSE, kernel)
+                alpha = np.maximum(alpha, alpha_fill.astype(np.float32)/255.0)
+
+                # =========================
+                # 🔥 이진화
+                # =========================
+                alpha_bin = (alpha > 0.6).astype(np.float32)
+                strong_fg = (alpha > 0.8).astype(np.float32)
+                alpha_bin = np.maximum(alpha_bin, strong_fg)
+
+                alpha_bin = cv2.medianBlur((alpha_bin * 255).astype(np.uint8), 3) / 255.0
+                alpha = alpha_bin
+
+                # =========================
+                # 🔥 합성
+                # =========================
+                bg_frame = np.full_like(frame, bg_color)
+                fg_part = (frame * alpha[..., None]).astype(np.float32)
+                bg_part = (bg_frame * (1.0 - alpha[..., None])).astype(np.float32)
+                result = (fg_part + bg_part).astype(np.uint8)
+
                 out.write(result)
 
                 prev_alpha = alpha
-                prev_hsv = img_hsv
+                prev_frame = frame.copy()
                 i += 1
 
                 if i % 10 == 0 or i == total:
@@ -168,6 +269,20 @@ class RemoveBGTab(QWidget):
         row2.addWidget(self.browse_out_btn)
         layout.addLayout(row2)
 
+        # [수정] 크로마키 색상 선택 버튼 및 라벨 레이아웃 (출력폴더 아래, 프로그레스 바 위)
+        chroma_row = QHBoxLayout()
+        self.chroma_label = QLabel("Chroma Key:")
+        self.chroma_btn = QPushButton("Select Color")
+        self.chroma_btn.setStyleSheet("background-color: #000000; color: #ffffff;")
+        self.chroma_btn.clicked.connect(self.select_color)
+        
+        # 기본 색상 설정 (검은색 #000000)
+        self.selected_qcolor = QColor(0, 0, 0)
+        
+        chroma_row.addWidget(self.chroma_label)
+        chroma_row.addWidget(self.chroma_btn)
+        layout.addLayout(chroma_row)
+
         self.prog = QProgressBar()
         layout.addWidget(self.prog)
 
@@ -178,6 +293,15 @@ class RemoveBGTab(QWidget):
         self.run_btn = QPushButton(self.parent.t('rbg_start_btn'))
         self.run_btn.clicked.connect(self.start_task)
         layout.addWidget(self.run_btn)
+
+    def select_color(self):
+        # 색상 팔레트(QColorDialog) 열기
+        color = QColorDialog.getColor(self.selected_qcolor, self, "Select Chromakey Color")
+        if color.isValid():
+            self.selected_qcolor = color
+            hex_val = self.selected_qcolor.name()
+            # 텍스트 및 배경색상 업데이트
+            self.chroma_btn.setStyleSheet(f"background-color: {hex_val}; color: #ffffff;")
 
     def select_input(self):
         path, _ = QFileDialog.getOpenFileName()
@@ -203,7 +327,11 @@ class RemoveBGTab(QWidget):
         self.prog.setValue(0)
         self.log.clear()
 
-        self.worker = RemoveBGWorker(self.input_edit.text(), self.output_edit.text())
+        self.worker = RemoveBGWorker(
+            self.input_edit.text(), 
+            self.output_edit.text(), 
+            chromakey_rgb=self.selected_qcolor
+        )
         self.worker.progress.connect(self.prog.setValue)
         self.worker.log.connect(self.log.append)
         self.worker.finished.connect(lambda: self.run_btn.setEnabled(True))
